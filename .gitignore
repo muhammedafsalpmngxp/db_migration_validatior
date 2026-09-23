@@ -13,3 +13,4 @@ wheels/
 .env
 last_run.json
 .pytest_cache/
+logs/

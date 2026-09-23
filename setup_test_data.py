@@ -1,4 +1,4 @@
-"""Create the two sample databases with deliberate, known differences.
+"""Create the two sample SQL Server databases with deliberate, known differences.
 
     python setup_test_data.py            # drop and recreate both databases
 
@@ -9,7 +9,7 @@ SCHEMA
   inventory       exists only in B
   customers       B adds loyalty_tier, drops is_active,
                   email varchar(120) -> varchar(255), country varchar(2) -> varchar(3)
-  orders          amount numeric(10,2) -> double precision,
+  orders          amount decimal(10,2) -> float,
                   status NOT NULL -> NULL,
                   extra index idx_orders_status in B
   order_items     identical schema, data drift only
@@ -22,73 +22,74 @@ DATA
 """
 import sys
 
-import psycopg2
+import pyodbc
 
 import config
 
-DDL_A = """
-CREATE TABLE customers (
-    customer_id  integer PRIMARY KEY,
+# One statement per element: pyodbc sends a single batch per execute().
+DDL_A = [
+    """CREATE TABLE customers (
+    customer_id  int PRIMARY KEY,
     full_name    varchar(100) NOT NULL,
     email        varchar(120) NOT NULL,
-    country      varchar(2),
-    signup_date  date,
-    is_active    boolean DEFAULT true
-);
-CREATE TABLE orders (
-    order_id     integer PRIMARY KEY,
-    customer_id  integer NOT NULL REFERENCES customers(customer_id),
+    country      varchar(2) NULL,
+    signup_date  date NULL,
+    is_active    bit DEFAULT 1
+)""",
+    """CREATE TABLE orders (
+    order_id     int PRIMARY KEY,
+    customer_id  int NOT NULL REFERENCES customers(customer_id),
     order_date   date NOT NULL,
     status       varchar(20) NOT NULL,
-    amount       numeric(10,2) NOT NULL
-);
-CREATE INDEX idx_orders_customer ON orders(customer_id);
-CREATE TABLE order_items (
-    item_id      integer PRIMARY KEY,
-    order_id     integer NOT NULL,
+    amount       decimal(10,2) NOT NULL
+)""",
+    "CREATE INDEX idx_orders_customer ON orders(customer_id)",
+    """CREATE TABLE order_items (
+    item_id      int PRIMARY KEY,
+    order_id     int NOT NULL,
     product_sku  varchar(32) NOT NULL,
-    qty          integer NOT NULL,
-    unit_price   numeric(10,2) NOT NULL
-);
-CREATE TABLE products (
+    qty          int NOT NULL,
+    unit_price   decimal(10,2) NOT NULL
+)""",
+    """CREATE TABLE products (
     sku       varchar(32) PRIMARY KEY,
     name      varchar(120) NOT NULL,
-    category  varchar(40),
-    price     numeric(10,2) NOT NULL
-);
-"""
+    category  varchar(40) NULL,
+    price     decimal(10,2) NOT NULL
+)""",
+]
 
-DDL_B = """
-CREATE TABLE customers (
-    customer_id   integer PRIMARY KEY,
+DDL_B = [
+    """CREATE TABLE customers (
+    customer_id   int PRIMARY KEY,
     full_name     varchar(100) NOT NULL,
     email         varchar(255) NOT NULL,
-    country       varchar(3),
-    signup_date   date,
+    country       varchar(3) NULL,
+    signup_date   date NULL,
     loyalty_tier  varchar(20) DEFAULT 'bronze'
-);
-CREATE TABLE orders (
-    order_id     integer PRIMARY KEY,
-    customer_id  integer NOT NULL REFERENCES customers(customer_id),
+)""",
+    """CREATE TABLE orders (
+    order_id     int PRIMARY KEY,
+    customer_id  int NOT NULL REFERENCES customers(customer_id),
     order_date   date NOT NULL,
-    status       varchar(20),
-    amount       double precision NOT NULL
-);
-CREATE INDEX idx_orders_customer ON orders(customer_id);
-CREATE INDEX idx_orders_status ON orders(status);
-CREATE TABLE order_items (
-    item_id      integer PRIMARY KEY,
-    order_id     integer NOT NULL,
+    status       varchar(20) NULL,
+    amount       float NOT NULL
+)""",
+    "CREATE INDEX idx_orders_customer ON orders(customer_id)",
+    "CREATE INDEX idx_orders_status ON orders(status)",
+    """CREATE TABLE order_items (
+    item_id      int PRIMARY KEY,
+    order_id     int NOT NULL,
     product_sku  varchar(32) NOT NULL,
-    qty          integer NOT NULL,
-    unit_price   numeric(10,2) NOT NULL
-);
-CREATE TABLE inventory (
+    qty          int NOT NULL,
+    unit_price   decimal(10,2) NOT NULL
+)""",
+    """CREATE TABLE inventory (
     sku        varchar(32) PRIMARY KEY,
     warehouse  varchar(20) NOT NULL,
-    qty        integer NOT NULL
-);
-"""
+    qty        int NOT NULL
+)""",
+]
 
 CUSTOMERS_A = [
     (1, "Anita Raghavan", "anita@example.com", "IN", "2023-01-14", True),
@@ -183,35 +184,47 @@ INVENTORY_B = [
 
 
 def _recreate_database(name):
-    conn = psycopg2.connect(config.admin_dsn())
-    conn.autocommit = True
-    with conn.cursor() as cur:
+    # CREATE / DROP DATABASE cannot run inside a transaction, hence autocommit.
+    conn = pyodbc.connect(config.admin_dsn(), autocommit=True)
+    ident = "[" + name.replace("]", "]]") + "]"
+    try:
+        cur = conn.cursor()
+        # SINGLE_USER WITH ROLLBACK IMMEDIATE evicts any session still holding the database.
         cur.execute(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
-            " WHERE datname = %s AND pid <> pg_backend_pid()",
-            (name,),
+            "IF DB_ID(?) IS NOT NULL BEGIN "
+            "  ALTER DATABASE " + ident + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE; "
+            "  DROP DATABASE " + ident + "; "
+            "END",
+            name,
         )
-        cur.execute(f'DROP DATABASE IF EXISTS "{name}"')
-        cur.execute(f'CREATE DATABASE "{name}"')
-    conn.close()
+        cur.execute("CREATE DATABASE " + ident)
+    finally:
+        conn.close()
 
 
 def _load(dsn, ddl, inserts):
-    conn = psycopg2.connect(dsn)
-    conn.autocommit = False
-    with conn.cursor() as cur:
-        cur.execute(ddl)
+    conn = pyodbc.connect(dsn, autocommit=False)
+    try:
+        cur = conn.cursor()
+        for statement in ddl:
+            cur.execute(statement)
+        cur.fast_executemany = True
         for table, columns, rows in inserts:
-            placeholders = ", ".join(["%s"] * len(columns))
+            placeholders = ", ".join(["?"] * len(columns))
             cur.executemany(
                 f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})", rows
             )
-    conn.commit()
-    conn.close()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def main():
-    print(f"Server: {config.PG_HOST}:{config.PG_PORT} as {config.PG_USER}")
+    auth = "Windows auth" if config.MSSQL_TRUSTED else f"login {config.MSSQL_USER}"
+    print(f"Server: {config.server()} ({auth}) via {config.MSSQL_DRIVER}")
 
     for name in (config.DB_A_NAME, config.DB_B_NAME):
         _recreate_database(name)
@@ -270,7 +283,11 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except psycopg2.OperationalError as exc:
-        print(f"Cannot reach Postgres: {exc}", file=sys.stderr)
-        print("Check PG_HOST / PG_PORT / PG_USER / PG_PASSWORD in your .env", file=sys.stderr)
+    except pyodbc.Error as exc:
+        print(f"Cannot reach SQL Server: {exc}", file=sys.stderr)
+        print(
+            "Check MSSQL_HOST / MSSQL_PORT / MSSQL_USER / MSSQL_PASSWORD (or MSSQL_TRUSTED=yes)"
+            " and MSSQL_DRIVER in your .env",
+            file=sys.stderr,
+        )
         sys.exit(1)

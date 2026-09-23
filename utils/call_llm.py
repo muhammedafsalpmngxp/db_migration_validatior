@@ -7,21 +7,61 @@ Providers:
 """
 import os
 import re
+import time
 
 import config
+from utils.observability import LLM_STATS, estimate_tokens, get_logger
+
+log = get_logger("dbcompare.llm")
 
 # ---------------------------------------------------------------- public API
 
 
-def call_llm(prompt, system=None):
+def call_llm(prompt, system=None, label=None):
+    """Run one LLM call, logging it and accounting its token usage.
+
+    Every call is counted in ``LLM_STATS`` - successes and failures alike - so the
+    UI can report how many calls a run made and what they cost.
+    """
     provider = os.getenv("LLM_PROVIDER", config.LLM_PROVIDER).lower()
-    if provider == "mock":
-        return _mock_llm(prompt)
-    if provider == "anthropic":
-        return _anthropic(prompt, system)
-    if provider == "openai":
-        return _openai(prompt, system)
-    raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
+    model = os.getenv("LLM_MODEL", config.LLM_MODEL)
+    label = label or "llm"
+    started = time.time()
+
+    log.info("LLM call #%s [%s] provider=%s model=%s prompt_chars=%s",
+             LLM_STATS.calls + 1, label, provider, model, len(prompt))
+    try:
+        if provider == "mock":
+            text, usage = _mock_llm(prompt), None
+        elif provider == "anthropic":
+            text, usage = _anthropic(prompt, system)
+        elif provider == "openai":
+            text, usage = _openai(prompt, system)
+        else:
+            raise ValueError(f"Unknown LLM_PROVIDER: {provider}")
+    except Exception as exc:
+        elapsed = time.time() - started
+        LLM_STATS.record(provider, model, estimate_tokens(prompt), 0, elapsed,
+                         estimated=True, error=exc, label=label, prompt=prompt)
+        log.exception("LLM call [%s] failed after %.2fs: %s", label, elapsed, exc)
+        raise
+
+    elapsed = time.time() - started
+    if usage:
+        prompt_tokens, completion_tokens, estimated = usage[0], usage[1], False
+        cached = usage[2] if len(usage) > 2 else 0
+    else:
+        prompt_tokens = estimate_tokens((system or "") + prompt)
+        completion_tokens = estimate_tokens(text)
+        estimated = True
+        cached = 0
+    LLM_STATS.record(provider, model, prompt_tokens, completion_tokens, elapsed,
+                     estimated=estimated, label=label, prompt=prompt, response=text,
+                     cached=cached)
+    log.info("LLM call [%s] ok in %.2fs - tokens in=%s (%s cached) out=%s%s",
+             label, elapsed, prompt_tokens, cached, completion_tokens,
+             " (estimated)" if estimated else "")
+    return text
 
 
 # ---------------------------------------------------------------- providers
@@ -39,7 +79,15 @@ def _anthropic(prompt, system):
     if system:
         kwargs["system"] = system
     resp = client.messages.create(**kwargs)
-    return "".join(b.text for b in resp.content if b.type == "text")
+    text = "".join(b.text for b in resp.content if b.type == "text")
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return text, None
+    return text, (
+        getattr(usage, "input_tokens", 0),
+        getattr(usage, "output_tokens", 0),
+        getattr(usage, "cache_read_input_tokens", 0) or 0,
+    )
 
 
 def _openai(prompt, system):
@@ -66,10 +114,23 @@ def _openai(prompt, system):
         # Reasoning models (o-series, gpt-5) reject max_tokens and want max_completion_tokens.
         if "max_tokens" not in str(exc):
             raise
+        log.warning("Retrying with max_completion_tokens: %s", exc)
         resp = client.chat.completions.create(
             model=model, messages=messages, max_completion_tokens=config.LLM_MAX_TOKENS
         )
-    return resp.choices[0].message.content or ""
+    text = resp.choices[0].message.content or ""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return text, None
+    # Providers cache long prompt prefixes and bill them at a discount; the count is
+    # reported here, which is the only way to know the ordering of our prompt is working.
+    details = getattr(usage, "prompt_tokens_details", None)
+    cached = getattr(details, "cached_tokens", 0) if details else 0
+    return text, (
+        getattr(usage, "prompt_tokens", 0),
+        getattr(usage, "completion_tokens", 0),
+        cached or 0,
+    )
 
 
 # ---------------------------------------------------------------- mock
@@ -81,6 +142,15 @@ def _mock_llm(prompt):
     Step 0 -> compare_row_counts, step 1/2 -> compare_table_data on the first two
     common tables, then finish. Enough to exercise every branch of the flow.
     """
+    if "## UNMATCHED IN A" in prompt:
+        return (
+            "```yaml\n"
+            "thinking: |\n"
+            "  Name based matching already covered the obvious ones.\n"
+            "pairs: []\n"
+            "```"
+        )
+
     if "## REVIEW TASK" in prompt:
         return (
             "```yaml\n"

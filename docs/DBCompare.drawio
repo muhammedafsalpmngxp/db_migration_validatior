@@ -1,0 +1,461 @@
+<mxfile host="app.diagrams.net" agent="DBCompare" version="24.7.17" type="device">
+  <diagram id="page-architecture" name="1. Architecture">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="a-title" value="DBCompare — high level architecture" style="text;html=1;fontSize=22;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="24" width="700" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="a-sub" value="Agentic comparison of two Microsoft SQL Server databases. Facts are computed; the LLM decides what to look at and writes it up." style="text;html=1;fontSize=13;fontColor=#5A6570;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="900" height="26" as="geometry" />
+        </mxCell>
+
+        <mxCell id="a-user" value="Engineer&#10;(browser)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="60" y="200" width="130" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="a-ui-group" value="Presentation" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#B6C2CF;dashed=1;verticalAlign=top;align=left;spacingLeft=10;fontColor=#5A6570;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="240" y="130" width="280" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="a-app" value="app.py — Streamlit UI&#10;&#10;• sidebar: server, auth, ODBC driver, databases, LLM&#10;• connection cards + table pickers (mirrored)&#10;• 9 result tabs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#4A7EBB;align=left;spacingLeft=10;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="260" y="165" width="240" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="a-cli" value="main.py — CLI&#10;same flow, prints the report&#10;and writes last_run.json" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#4A7EBB;align=left;spacingLeft=10;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="260" y="315" width="240" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="a-check" value="check_setup.py — preflight" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#4A7EBB;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="260" y="410" width="240" height="34" as="geometry" />
+        </mxCell>
+
+        <mxCell id="a-orch-group" value="Orchestration (PocketFlow)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#B6C2CF;dashed=1;verticalAlign=top;align=left;spacingLeft=10;fontColor=#5A6570;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="570" y="130" width="300" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="a-flow" value="flow.py&#10;run_comparison(question, tables)&#10;&#10;builds the shared store, runs the graph,&#10;always returns logs / errors / llm_stats&#10;(LAST_RUN keeps a failed run)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F1E6;strokeColor=#4F8A5B;align=left;spacingLeft=10;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="590" y="165" width="260" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="a-nodes" value="nodes.py — 7 nodes&#10;FetchSchemas · MatchTables · SchemaDiff&#10;Decide ⇄ ExecuteTool · ComposeReport&#10;Supervisor · Done" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F1E6;strokeColor=#4F8A5B;align=left;spacingLeft=10;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="590" y="300" width="260" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="a-tools" value="tools.py — tool catalog (6 tools)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F1E6;strokeColor=#4F8A5B;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="590" y="410" width="260" height="34" as="geometry" />
+        </mxCell>
+
+        <mxCell id="a-core-group" value="Deterministic core / access" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#B6C2CF;dashed=1;verticalAlign=top;align=left;spacingLeft=10;fontColor=#5A6570;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="920" y="130" width="300" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="a-differ" value="utils/differ.py — pure functions&#10;&#10;match_tables / apply_matches&#10;diff_schemas · diff_rows&#10;(no LLM: whether two things differ)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#C08A34;align=left;spacingLeft=10;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="940" y="165" width="260" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="a-db" value="utils/db.py — pyodbc&#10;INFORMATION_SCHEMA + sys.indexes,&#10;TOP (n), ? params, bracket quoting,&#10;guarded SELECT runner" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#C08A34;align=left;spacingLeft=10;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="940" y="300" width="260" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="a-obs" value="utils/observability.py — logs + LLM_STATS" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#C08A34;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="940" y="410" width="260" height="34" as="geometry" />
+        </mxCell>
+
+        <mxCell id="a-ext-group" value="External" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#B6C2CF;dashed=1;verticalAlign=top;align=left;spacingLeft=10;fontColor=#5A6570;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1270" y="130" width="280" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="a-sql" value="Microsoft SQL Server (AWS RDS)&#10;&#10;A  AppMasterDB_UAT — 127 tables, dbo&#10;B  AlTasnimBI — 88 tables, 10 schemas&#10;read-only, rolled back" style="shape=cylinder3;boundedLbl=1;backgroundOutline=1;html=1;fillColor=#EDE7F6;strokeColor=#6F4CA8;align=left;spacingLeft=10;fontSize=12;verticalAlign=top;spacingTop=14;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="165" width="240" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="a-llm" value="LLM provider&#10;openai · anthropic · mock&#10;via utils/call_llm.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;align=left;spacingLeft=10;fontSize=12;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1290" y="340" width="240" height="75" as="geometry" />
+        </mxCell>
+
+        <mxCell id="a-log" value="logs/dbcompare.log&#10;rotating, 2 MB × 3" style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="940" y="480" width="160" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="a-json" value="last_run.json" style="shape=note;whiteSpace=wrap;html=1;size=14;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1120" y="480" width="110" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="a-e1" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="a-user" target="a-app">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e2" value="run_comparison()" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;fontSize=11;" edge="1" parent="1" source="a-app" target="a-flow">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e3" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="a-cli" target="a-flow">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e4" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="a-flow" target="a-nodes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e5" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="a-nodes" target="a-tools">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e6" value="pure diff" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;fontSize=11;" edge="1" parent="1" source="a-nodes" target="a-differ">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e7" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="a-tools" target="a-db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e8" value="ODBC, read-only" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#6F4CA8;fontSize=11;" edge="1" parent="1" source="a-db" target="a-sql">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e9" value="4 prompt types" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;fontSize=11;" edge="1" parent="1" source="a-nodes" target="a-llm">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="880" y="377" />
+              <mxPoint x="880" y="560" />
+              <mxPoint x="1410" y="560" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a-e10" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#9AA4B0;dashed=1;" edge="1" parent="1" source="a-obs" target="a-log">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a-e11" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#9AA4B0;dashed=1;" edge="1" parent="1" source="a-cli" target="a-json">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="380" y="600" />
+              <mxPoint x="1175" y="600" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a-e12" value="logs, errors, tokens back to the UI" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#9AA4B0;dashed=1;fontSize=11;" edge="1" parent="1" source="a-obs" target="a-app">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1070" y="120" />
+              <mxPoint x="380" y="120" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="a-legend" value="Legend&#10;blue — UI / entry points        green — orchestration (PocketFlow)&#10;amber — deterministic logic     purple — databases        pink — LLM" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B6C2CF;align=left;spacingLeft=10;fontSize=11;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="480" width="420" height="80" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram id="page-workflow" name="2. Application workflow">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="w-title" value="Application workflow — one comparison, start to finish" style="text;html=1;fontSize=22;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="24" width="800" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w-l1" value="Configure" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=none;fontSize=12;fontStyle=1;fontColor=#5A6570;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="100" width="180" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w1" value="load_dotenv() at the top of app.py&#10;(.env before the widgets, or the sidebar&#10;defaults would overwrite it)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#4A7EBB;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="240" y="90" width="260" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="w2" value="Sidebar: server · port · auth (SQL login or&#10;Windows) · ODBC driver · trust cert ·&#10;database A / B · LLM provider, model, key ·&#10;step budget" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#4A7EBB;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="540" y="90" width="300" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="w3" value="os.environ.update(...) then&#10;importlib.reload(config)&#10;— config is read at import time" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#4A7EBB;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="880" y="90" width="260" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w-l2" value="Pick the scope" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=none;fontSize=12;fontStyle=1;fontColor=#5A6570;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="220" width="180" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w4" value="ping both databases&#10;→ connection cards" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#4A7EBB;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="240" y="210" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="w5" value="list_tables() per side&#10;@st.cache_data(ttl=300)&#10;qualified: schema.table" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#4A7EBB;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="480" y="210" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="w6" value="two multiselects, mirrored on the bare&#10;table name — a pick on either side&#10;resolves to that side's own schema" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#4A7EBB;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="720" y="205" width="300" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="w7" value="question + Run comparison" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D6E4F7;strokeColor=#4A7EBB;fontSize=12;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="1060" y="210" width="220" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w-l3" value="Run" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=none;fontSize=12;fontStyle=1;fontColor=#5A6570;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="330" width="180" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w8" value="run_comparison(question, on_progress, tables)&#10;&#10;setup_logging() · LLM_STATS.reset() · log buffer cleared&#10;shared = {question, tables, history, trace, errors}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F1E6;strokeColor=#4F8A5B;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="240" y="320" width="380" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w9" value="PocketFlow graph runs&#10;(see tab 3 — Agents &amp; nodes)&#10;progress lines stream to st.status" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F1E6;strokeColor=#4F8A5B;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="660" y="320" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w10" value="finally: seconds, llm_stats, logs&#10;attached to the store;&#10;flow.LAST_RUN keeps a failed run&#10;so the UI can still show why" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F1E6;strokeColor=#4F8A5B;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="320" width="280" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w-l4" value="Read the result" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=none;fontSize=12;fontStyle=1;fontColor=#5A6570;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="40" y="470" width="180" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w-metrics" value="Metric rows — tables only in A / only in B / schema changes / data drift    ·    LLM calls · tokens consumed (in / out) · run time · errors" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B6C2CF;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="240" y="460" width="1040" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w-t1" value="1 Report&#10;the written answer&#10;+ download .md" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="240" y="530" width="160" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w-t2" value="2 Table matching&#10;every pair + how&#10;(exact / normalized /&#10;agent / given), unmatched" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="415" y="530" width="160" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w-t3" value="3 Schema differences&#10;one-sided tables,&#10;column / type / index&#10;changes, row counts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="590" y="530" width="160" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w-t4" value="4 Data differences&#10;per table: modified,&#10;only in A, only in B" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="765" y="530" width="160" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w-t5" value="5 Agent steps&#10;each tool call with&#10;its reasoning and&#10;observation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="940" y="530" width="160" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w-t6" value="6 Review&#10;supervisor verdicts&#10;+ run trace" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1115" y="530" width="160" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w-t7" value="7 LLM usage&#10;CI-style pipeline,&#10;prompt / response pane,&#10;token + latency charts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="240" y="640" width="160" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w-t8" value="8 Logs&#10;level + text filter,&#10;download run.log" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="415" y="640" width="160" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w-t9" value="9 Errors&#10;swallowed exceptions&#10;with tracebacks,&#10;failed LLM calls" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;align=left;spacingLeft=8;verticalAlign=top;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="590" y="640" width="160" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w-note" value="Scope drives cost: selecting tables pushes the filter into introspection&#10;(fetch_schema(only=...)), so row counts run only for those tables.&#10;Measured: 3 tables 6.0s · all tables 52s (mock) / 135s (with matching).&#10;&#10;Leaving both pickers empty is the AI path: the agent proposes the matches&#10;(tab 3 of this file), and its proposals are validated against both table lists." style="shape=note;whiteSpace=wrap;html=1;size=16;fillColor=#FFF4E5;strokeColor=#C08A34;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="800" y="640" width="480" height="140" as="geometry" />
+        </mxCell>
+
+        <mxCell id="we1" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="w1" target="w2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="we2" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="w2" target="w3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="we3" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="w3" target="w4">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1180" y="190" />
+              <mxPoint x="340" y="190" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="we4" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="w4" target="w5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="we5" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="w5" target="w6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="we6" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="w6" target="w7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="we7" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="w7" target="w8">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1170" y="295" />
+              <mxPoint x="430" y="295" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="we8" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="w8" target="w9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="we9" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="w9" target="w10">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="we10" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="w10" target="w-metrics">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram id="page-agents" name="3. Agents &amp; nodes">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="n-title" value="Agents &amp; nodes — the PocketFlow graph" style="text;html=1;fontSize=22;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="24" width="800" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="n-sub" value="Pink = the node calls an LLM.  Amber = deterministic, computed from the databases.  Every LLM node has a fallback, so a bad reply degrades the run instead of ending it." style="text;html=1;fontSize=13;fontColor=#5A6570;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="1100" height="26" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-start" value="run_comparison()" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E3F1E6;strokeColor=#4F8A5B;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="180" width="140" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-fetch" value="FetchSchemasNode  (BatchNode)&#10;&#10;reads both schemas in one round trip each&#10;INFORMATION_SCHEMA + sys.indexes&#10;fetch_schema(only=selected) — row counts&#10;only for the tables in scope&#10;&#10;→ shared[&quot;raw_schema&quot;]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#C08A34;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="260" y="140" width="290" height="140" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-match" value="MatchTablesNode   ⟡ LLM&#10;&#10;1  exact name        (schema-agnostic)&#10;2  normalized name   (case / _ / spaces)&#10;3  agent proposes the leftovers, and every&#10;   proposal is checked against both lists&#10;&#10;asked only when the user named no tables&#10;retries 2 · fallback: keep name matches&#10;→ shared[&quot;table_matches&quot;], shared[&quot;schema&quot;]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="610" y="130" width="310" height="165" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-diff" value="SchemaDiffNode&#10;&#10;differ.diff_schemas — columns, types,&#10;nullability, defaults, primary keys,&#10;indexes, row counts. No LLM.&#10;→ shared[&quot;schema_diff&quot;]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#C08A34;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="980" y="140" width="290" height="140" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-loop-group" value="the agent loop — budget MAX_AGENT_STEPS (8)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#B6C2CF;dashed=1;verticalAlign=top;align=left;spacingLeft=10;fontColor=#5A6570;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="240" y="360" width="700" height="250" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-decide" value="DecideActionNode   ⟡ LLM  &quot;decide&quot;&#10;&#10;think: which investigation next?&#10;sees the question, the structural diff,&#10;every observation so far, the tool catalog&#10;returns YAML: tool + params + reasoning&#10;&#10;retries 3 · fallback: finish and report" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="270" y="395" width="300" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="n-exec" value="ExecuteToolNode&#10;&#10;act: runs the chosen tool, times it,&#10;appends the observation to history.&#10;A tool error is an observation too,&#10;so the agent can try another angle.&#10;No LLM." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#C08A34;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="620" y="395" width="290" height="150" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-tools" value="tools.py — the toolbox the agent picks from&#10;&#10;compare_schema        re-read both schemas, full structural diff&#10;compare_row_counts    row count of every matched table (cheap first move)&#10;compare_table_data    primary-key row diff of one table — missing + modified rows&#10;sample_rows           look at actual rows from one side&#10;run_sql               one read-only SELECT / WITH, T-SQL TOP (n), write + DDL + proc keywords rejected&#10;finish                enough evidence, write the report&#10;&#10;_locate() resolves a matched pair back to its real (schema, table) on each side" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#C08A34;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="990" y="360" width="560" height="200" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-report" value="ComposeReportNode   ⟡ LLM  &quot;report&quot;&#10;&#10;writes the Markdown report from the&#10;structural diff + the gathered evidence.&#10;Rule in the prompt: only facts that appear&#10;above, never invent a table or a count.&#10;&#10;retries 2 · fallback: the computed diff&#10;alone, which is still valid" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="270" y="680" width="300" height="170" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-super" value="SupervisorNode   ⟡ LLM  &quot;supervise&quot;&#10;&#10;checks the draft against the evidence:&#10;unsupported claim, invented number,&#10;a finding left out, empty report.&#10;approve → done,  reject → back to Decide&#10;(MAX_SUPERVISOR_RETRIES = 1)&#10;&#10;retries 2 · fallback: approve, note why" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="620" y="680" width="300" height="170" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-done" value="DoneNode&#10;run complete" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E3F1E6;strokeColor=#4F8A5B;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="990" y="730" width="150" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n-obs" value="observability — every node logs through log()/log_error()&#10;ErrorTracking parks the exception a fallback swallowed;&#10;post() moves it into shared[&quot;errors&quot;] with where / type / message" style="shape=note;whiteSpace=wrap;html=1;size=16;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=11;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1190" y="680" width="360" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ne1" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="n-start" target="n-fetch">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ne2" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="n-fetch" target="n-match">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ne3" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="n-match" target="n-diff">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ne4" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#5A6570;" edge="1" parent="1" source="n-diff" target="n-decide">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1125" y="330" />
+              <mxPoint x="420" y="330" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ne5" value="&quot;tool&quot;" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;fontSize=11;" edge="1" parent="1" source="n-decide" target="n-exec">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ne6" value="&quot;decide&quot; — next step" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#C08A34;fontSize=11;" edge="1" parent="1" source="n-exec" target="n-decide">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="765" y="575" />
+              <mxPoint x="420" y="575" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ne7" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#C08A34;dashed=1;" edge="1" parent="1" source="n-exec" target="n-tools">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ne8" value="&quot;report&quot; — finish, or budget spent" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;fontSize=11;" edge="1" parent="1" source="n-decide" target="n-report">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ne9" value="&quot;supervise&quot;" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;fontSize=11;" edge="1" parent="1" source="n-report" target="n-super">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ne10" value="&quot;approve&quot;" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;fontSize=11;" edge="1" parent="1" source="n-super" target="n-done">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ne11" value="&quot;retry&quot; — gather what is missing" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;dashed=1;fontSize=11;" edge="1" parent="1" source="n-super" target="n-decide">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="960" y="640" />
+              <mxPoint x="200" y="640" />
+              <mxPoint x="200" y="470" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram id="page-llm" name="4. LLM calls">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="l-title" value="LLM calls — what is asked, and what it costs" style="text;html=1;fontSize=22;fontStyle=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="24" width="800" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="l-sub" value="Every call goes through utils/call_llm.py — one entry point, one place that logs, counts and retries. Figures are a measured run against AppMasterDB_UAT vs AlTasnimBI, gpt-4o, no table selection." style="text;html=1;fontSize=13;fontColor=#5A6570;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="1200" height="26" as="geometry" />
+        </mxCell>
+
+        <mxCell id="l-call1" value="1 · &quot;match tables&quot;   MatchTablesNode&#10;&#10;in:  the two lists of tables name matching could not pair&#10;out: YAML pairs, each checked against both lists&#10;when: only if the user selected no tables&#10;retries 2 → fallback: keep the name matches" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="130" width="420" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="l-call2" value="2..n · &quot;decide&quot;   DecideActionNode — once per step&#10;&#10;in:  question · structural diff · every observation so far ·&#10;     tool catalog · reviewer feedback if the draft came back&#10;out: YAML — tool, params, thinking, reason&#10;retries 3 → fallback: finish and report&#10;budget: MAX_AGENT_STEPS = 8" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="285" width="420" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="l-call3" value="n+1 · &quot;report&quot;   ComposeReportNode&#10;&#10;in:  structural diff + all gathered evidence&#10;out: the Markdown report&#10;retries 2 → fallback: the computed diff alone" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="455" width="420" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="l-call4" value="n+2 · &quot;supervise&quot;   SupervisorNode&#10;&#10;in:  the evidence + the draft report&#10;out: approve / reject + feedback&#10;reject → one more pass through Decide&#10;retries 2 → fallback: approve, note why" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="595" width="420" height="125" as="geometry" />
+        </mxCell>
+
+        <mxCell id="l-entry" value="utils/call_llm.py&#10;call_llm(prompt, system, label)&#10;&#10;• picks the provider: openai | anthropic | mock&#10;• logs the call before and after&#10;• reads the provider's usage block for real token counts,&#10;  estimates (~4 chars/token) and flags it when there is none&#10;• records success AND failure in LLM_STATS&#10;• keeps prompt + reply (20k chars, LLM_TRACE_CHARS=0 to disable)&#10;• extract_yaml() pulls the fenced block out of the reply" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B04A73;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="560" y="130" width="440" height="195" as="geometry" />
+        </mxCell>
+
+        <mxCell id="l-provider" value="Provider&#10;openai (gpt-4o, default) · anthropic · mock&#10;mock replies deterministically — the whole&#10;agent loop runs offline, and the tests use it" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDE7EF;strokeColor=#B04A73;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="130" width="330" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="l-stats" value="LLM_STATS  (thread safe, reset per run)&#10;&#10;calls · failures · prompt / completion / total tokens ·&#10;seconds · estimated flag · per-call detail&#10;(label, provider, model, tokens, seconds, error, prompt, response)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF4E5;strokeColor=#C08A34;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="560" y="360" width="440" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="l-ui" value="Where it surfaces&#10;&#10;metrics row — LLM calls · tokens consumed (in / out) · run time · errors&#10;LLM usage tab — CI-style pipeline: one row per call interleaved with the&#10;tool calls each decide triggered, prompt / response pane, token and&#10;latency charts, per-call table&#10;CLI — one summary line + last_run.json&#10;logs/dbcompare.log — one line per call, before and after" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F0FE;strokeColor=#4A7EBB;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="560" y="520" width="440" height="200" as="geometry" />
+        </mxCell>
+
+        <mxCell id="l-measured" value="A measured run (no table selection)&#10;&#10;match tables   1 call&#10;decide         1 call&#10;report         1 call&#10;supervise      1 call&#10;————————————————————————&#10;total          4 calls · 22,097 tokens · 135 s&#10;&#10;An eight-step investigation is the other extreme:&#10;9 decide + 1 report + 1 supervise + 1 match = 12 calls.&#10;&#10;Earlier run, no matching step, 3 tables selected:&#10;7 calls · 7,890 tokens (in 6,546 / out 1,344) · 38 s" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F6F9;strokeColor=#9AA4B0;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;fontFamily=Courier New;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="270" width="330" height="270" as="geometry" />
+        </mxCell>
+
+        <mxCell id="l-guard" value="What keeps the LLM honest&#10;&#10;• every fact in the report is computed by differ.py, never generated&#10;• the matcher's proposals are validated against both table lists&#10;• the tool name must be in VALID_TOOLS; params must be a mapping&#10;• run_sql accepts one SELECT / WITH and rejects write, DDL and&#10;  procedure keywords; results are capped with TOP (n)&#10;• the supervisor can send a draft back once&#10;• every node has a fallback, so a bad reply degrades the run" style="shape=note;whiteSpace=wrap;html=1;size=18;fillColor=#E3F1E6;strokeColor=#4F8A5B;fontSize=12;align=left;spacingLeft=10;verticalAlign=top;spacingTop=8;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="570" width="330" height="200" as="geometry" />
+        </mxCell>
+
+        <mxCell id="le1" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;" edge="1" parent="1" source="l-call1" target="l-entry">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le2" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;" edge="1" parent="1" source="l-call2" target="l-entry">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le3" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;" edge="1" parent="1" source="l-call3" target="l-entry">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le4" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;" edge="1" parent="1" source="l-call4" target="l-entry">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le5" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#B04A73;fontSize=11;" edge="1" parent="1" source="l-entry" target="l-provider">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le6" value="record()" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#C08A34;fontSize=11;" edge="1" parent="1" source="l-entry" target="l-stats">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="le7" value="summary() → shared[&quot;llm_stats&quot;]" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;endArrow=blockThin;endFill=1;strokeColor=#4A7EBB;fontSize=11;" edge="1" parent="1" source="l-stats" target="l-ui">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

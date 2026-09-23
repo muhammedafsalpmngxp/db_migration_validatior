@@ -1,6 +1,6 @@
 # DBCompare
 
-An agentic AI that compares two Postgres databases — tables, columns, types, constraints,
+An agentic AI that compares two Microsoft SQL Server databases — tables, columns, types, constraints,
 indexes and row-level data — and writes a review-ready report. Built on
 [PocketFlow](https://github.com/The-Pocket/PocketFlow), managed with
 [uv](https://docs.astral.sh/uv/), with a Streamlit frontend.
@@ -26,13 +26,36 @@ report can't be hallucinated.
 ```bash
 cd DBCompare
 uv sync                       # creates .venv and installs everything
-cp .env.example .env          # then set OPENAI_API_KEY and your Postgres password
+cp .env.example .env          # then set OPENAI_API_KEY and your SQL Server login
 uv run setup_test_data.py     # builds the two sample databases
-uv run check_setup.py         # verifies Postgres + your OpenAI key
+uv run check_setup.py         # verifies the ODBC driver, SQL Server + your OpenAI key
 uv run streamlit run app.py   # http://localhost:8501
 ```
 
 No `pip install`, no `activate`: `uv run` resolves the environment each time.
+
+### Connecting to SQL Server
+
+The Python side needs `pyodbc` (installed by `uv sync`); the ODBC driver itself is a
+separate Microsoft download — install **ODBC Driver 18 for SQL Server** if you have
+neither 17 nor 18. `check_setup.py` prints the drivers it can see, and the Streamlit
+sidebar lists them in a dropdown. Leave `MSSQL_DRIVER` unset and the newest installed
+driver is picked automatically.
+
+```ini
+MSSQL_HOST=localhost        # or localhost\SQLEXPRESS for a named instance
+MSSQL_PORT=1433             # leave empty for a named instance
+MSSQL_USER=sa
+MSSQL_PASSWORD=...
+MSSQL_TRUSTED=no            # yes = current Windows login, USER/PASSWORD ignored
+MSSQL_SCHEMA=dbo
+MSSQL_ENCRYPT=yes           # Driver 18 encrypts by default
+MSSQL_TRUST_CERT=yes        # accept a local self-signed dev certificate
+```
+
+The account only ever needs read access: every connection rolls back, and
+`setup_test_data.py` is the one script that writes (it needs `CREATE DATABASE` on the
+server, so skip it when you point the tool at databases you already have).
 
 ### Using your OpenAI key
 
@@ -136,9 +159,10 @@ shared = {
 | `run_sql` | any read-only SELECT, e.g. `SELECT status, count(*) FROM orders GROUP BY status` |
 | `finish` | stop investigating and write the report |
 
-`run_sql` rejects multiple statements and anything that is not `SELECT`/`WITH`, connections
-open read-only with a 30s statement timeout, and identifiers go through
-`psycopg2.sql.Identifier`.
+`run_sql` rejects multiple statements and anything that is not `SELECT`/`WITH` (plus the
+T-SQL write, `EXEC`, `sp_`/`xp_` and `BULK` keywords), connections roll back with a 30s
+lock timeout, and table/column names go through `db.quote_ident`, which bracket-quotes
+them and rejects anything that is not a plain identifier.
 
 ---
 
@@ -150,7 +174,7 @@ open read-only with a 30s statement timeout, and identifiers go through
    Beyond a few hundred thousand rows, replace the body of `compare_table_data` with a
    checksum-per-block strategy (`md5(t::text)` aggregated over PK ranges) and only pull the
    blocks whose checksums disagree.
-3. Another engine (MySQL, Snowflake): only `utils/db.py` is Postgres-specific. Keep
+3. Another engine (Postgres, MySQL, Snowflake): only `utils/db.py` is SQL Server specific. Keep
    `fetch_schema` returning the same dictionary shape and the rest is unchanged.
 4. More investigative power: add a function to `tools.execute_tool`, describe it in
    `TOOL_CATALOG`, add the name to `VALID_TOOLS`. The agent picks it up with no other changes.
@@ -162,7 +186,7 @@ pyproject.toml        uv project definition and dependency groups
 .env.example          every setting, OpenAI-first
 config.py             env-driven settings and DSNs
 setup_test_data.py    builds the two sample databases
-check_setup.py        preflight: Postgres reachable, sample data present, key working
+check_setup.py        preflight: ODBC driver, SQL Server reachable, sample data, key working
 utils/db.py           introspection, row fetch, guarded SELECT
 utils/differ.py       deterministic schema and row diffing
 utils/call_llm.py     openai / anthropic / mock providers + YAML extraction
@@ -174,3 +198,40 @@ app.py                Streamlit UI
 test_project.py       pytest suite (12 tests)
 HISTORY.md            build log: what was created, in what order, and why
 ```
+
+## Observability
+
+Every run records logs, exceptions and LLM usage.
+
+* **Logs** — `utils/observability.setup_logging()` wires a console handler, a rotating
+  file at `logs/dbcompare.log` (2 MB × 3), and an in-memory ring buffer the UI reads.
+  Verbosity: `LOG_LEVEL=DEBUG` (default `INFO`).
+* **Exceptions** — a node that swallows an error in `exec_fallback` parks it and `post()`
+  moves it into `shared["errors"]` (`where` / `type` / `message`), so a degraded run still
+  says what failed. A run that aborts outright raises, and the partial store is kept in
+  `flow.LAST_RUN` (the Streamlit app reads it to show logs and usage for the failed run).
+* **LLM calls and tokens** — every call goes through `utils.call_llm.call_llm`, which
+  counts it in `LLM_STATS`: number of calls, failures, prompt/completion/total tokens,
+  and seconds. Token counts come from the provider's usage block; when a provider returns
+  none (the `mock` provider, some gateways) they are estimated at ~4 chars per token and
+  flagged `estimated`.
+
+The CLI prints the totals and writes them to `last_run.json`. The Streamlit app shows
+them as metrics plus three tabs: **LLM usage** (a CI-style pipeline - the step list on the
+left, one row per LLM call interleaved with the local tool calls each `decide` triggered,
+and a dark payload pane on the right showing the selected step's prompt, reply or tool
+observation - plus token and latency charts and a per-call table), **Logs** (level filter,
+text filter, download) and **Errors**.
+
+## Running it on a server
+
+`docker compose up -d --build` builds an image carrying Microsoft's ODBC driver and runs
+the Streamlit app on 8501. Configuration comes from `.env`, which is mounted at runtime
+rather than baked into the image, and the host's environment fills in anything `.env`
+leaves out.
+
+- `docs/DEPLOY_EC2.md` - instance, security group, key precedence, reverse proxy, and the
+  failures that actually happen.
+- `docs/HTTP_SURFACE_INTERNAL.md` - what the container exposes, what `enableCORS = false`
+  really allows, and what leaves the instance.
+"# db_migration_validatior" 

@@ -1,0 +1,33 @@
+# Secrets never enter the image: .env is mounted at runtime by docker-compose, so a
+# rebuilt or pushed image cannot carry a key or a database password.
+.env
+.env.*
+!.env.example
+
+# Local environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# History and tooling
+.git/
+.gitignore
+.github/
+
+# Run artefacts
+logs/
+last_run.json
+*.log
+
+# Developer-only files: the image runs the app, it does not test or document itself
+test_project.py
+setup_test_data.py
+docs/
+HISTORY.md
+README.md
+Dockerfile
+docker-compose.yml
+.dockerignore
