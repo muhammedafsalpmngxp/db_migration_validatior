@@ -1,16 +1,56 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+# The one .gitignore for the repo: backend/ (Python) and frontend/ (Next.js).
 
-# Virtual environments
-.venv
-
-# Project
+# ---- Secrets ---------------------------------------------------------------
 .env
-last_run.json
+.env.*
+!.env.example
+*.pem
+
+# ---- Backend (Python) --------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# Local virtual environments (a conda env lives outside the repo)
+.venv/
+venv/
+env/
+
+# ---- Frontend (Next.js) ------------------------------------------------------
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/coverage/
+frontend/.vercel/
+*.tsbuildinfo
+frontend/next-env.d.ts
+# Written by `next dev` when an AI agent runs it
+frontend/AGENTS.md
+frontend/CLAUDE.md
+
+# ---- Logs --------------------------------------------------------------------
 logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ---- Editors / OS ------------------------------------------------------------
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db

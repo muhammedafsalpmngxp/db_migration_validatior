@@ -1,0 +1,287 @@
+# Migration plan: which source tables become which target tables.
+#
+# This file holds only the mapping. Everything shown about a table - whether it exists,
+# its row count, its columns and their types - is read live from the database.
+#
+# Databases (names come from backend/.env):
+#   A = source  DB_SOURCE_A_NAME  (AppMasterDB_UAT)
+#   B = source  DB_SOURCE_B_NAME  (AppMasterEngDB_Local)
+#   T = target  DB_TARGET_NAME    (AlTasnimBI)
+#
+# Tables are written <side>.<schema>.<table> and matched case-insensitively. The source
+# tables listed here, in this order, are the migration scope; no other table is shown.
+#
+# Mapping types
+#   one_to_one  one source table -> one target table (renamed and/or moved schema)
+#   union       several source tables stacked into one target (target rows = sum)
+#   merge       a driving table enriched from a lookup (target rows = driving table rows)
+#   transform   several sources -> several targets through business logic (no count rule)
+#   excluded    in scope, deliberately not migrated (no targets)
+#
+# columns (optional) declares renames no naming rule can work out, e.g.
+#     columns: {Description: crew_type_name, "Nationals/Expats": nationality_type}
+# Undeclared columns are paired by name: exact, case, ignoring _ and spaces, and finally
+# by the target's naming convention (Supervisor -> supervisor_id), shown as "inferred".
+
+mappings:
+
+  # ---- AppMasterDB_UAT ------------------------------------------------------------
+
+  - id: activity_codes_norms
+    type: one_to_one
+    sources: [A.dbo.ActivityCodesNorms]
+    targets: [T.dbo.activity_codes_norms]
+
+  - id: activity_master_csv
+    type: one_to_one
+    sources: [A.dbo.ActivityMasterCSV]
+    targets: [T.dbo.activity_master_csv]
+
+  - id: activity_master_mapping
+    type: one_to_one
+    sources: [A.dbo.ActivityMasterMapping]
+    targets: [T.dbo.activity_master_mapping]
+
+  - id: activity_task_plan
+    type: one_to_one
+    sources: [A.dbo.ActivityTaskPlan]
+    targets: [T.dbo.activity_task_plan]
+
+  - id: activity_taskplan_job_progress
+    type: one_to_one
+    sources: [A.dbo.ActivityTaskPlan_JobProgress_Latest]
+    targets: [T.dbo.activity_taskplan_job_progress]
+
+  - id: activity_task_plan_project
+    type: excluded
+    sources: [A.dbo.ActivityTaskPlanProject]
+    note: Not used; no target table.
+
+  - id: company
+    type: one_to_one
+    sources: [A.dbo.Company]
+    targets: [T.ref.company]
+
+  - id: company_employees
+    type: one_to_one
+    sources: [A.dbo.company_employees]
+    targets: [T.ref.company_employees]
+
+  - id: crew_employee
+    type: one_to_one
+    sources: [A.dbo.CrewEmployee]
+    targets: [T.bridge.crew_employee]
+
+  - id: crew_equipment
+    type: one_to_one
+    sources: [A.dbo.CrewEquipment]
+    targets: [T.bridge.crew_equipment]
+
+  - id: crew
+    type: one_to_one
+    sources: [A.dbo.crews]
+    targets: [T.ref.crew]
+
+  - id: crew_type
+    type: merge
+    sources:
+      - {table: A.dbo.CrewType, role: driving}
+      - {table: A.dbo.OLD_NEW_CREW_MAPPING, role: lookup}
+    targets: [T.ref.crew_type]
+
+  - id: crew_type_employee
+    type: one_to_one
+    sources: [A.dbo.CrewTypeEmployee]
+    targets: [T.bridge.crew_type_employee]
+
+  - id: crew_type_equipment
+    type: one_to_one
+    sources: [A.dbo.CrewTypeEquipment]
+    targets: [T.bridge.crew_type_equipment]
+
+  - id: schedule_json_data
+    type: one_to_one
+    sources: [A.dbo.data_table_sched_jsons]
+    targets: [T.dbo.schedule_json_data]
+
+  - id: design_tracker_csv_import
+    type: one_to_one
+    sources: [A.dbo.DesignTrackerCSVImport]
+    targets: [T.dbo.DesignTracker_CSV_Import]
+
+  - id: employee
+    type: one_to_one
+    sources: [A.dbo.Employee]
+    targets: [T.ref.employee]
+
+  - id: employee_type
+    type: one_to_one
+    sources: [A.dbo.EmployeeType]
+    targets: [T.ref.employee_type]
+
+  - id: equipment
+    type: one_to_one
+    sources: [A.dbo.Equipment]
+    targets: [T.ref.equipment]
+
+  - id: equipment_type
+    type: one_to_one
+    sources: [A.dbo.EquipmentType]
+    targets: [T.ref.equipment_type]
+
+  - id: flaf_po_peg_scr_moc_document_data
+    type: one_to_one
+    sources: [A.dbo.flaf_po_peg_scr_moc_document_data]
+    targets: [T.dbo.flaf_po_peg_scr_moc_document_data]
+
+  - id: ftr_form_data
+    type: one_to_one
+    sources: [A.dbo.FTR_Form_Data]
+    targets: [T.dbo.FTR_form_data]
+
+  - id: job_progress_plan_snapshot
+    type: one_to_one
+    sources: [A.dbo.Job_Progress_PlanSnapshot]
+    targets: [T.dbo.job_progress_plan_snapshot]
+
+  - id: mapping_master
+    type: one_to_one
+    sources: [A.dbo.MappingMaster]
+    targets: [T.dbo.mapping_master]
+
+  - id: organization_structure
+    type: one_to_one
+    sources: [A.dbo.OrganizationStructure]
+    targets: [T.dbo.Organization_Structure]
+
+  - id: pa_ph_contact_numbers
+    type: one_to_one
+    sources: [A.dbo.PA_PH_CONTACT_Numbers]
+    targets: [T.dbo.PA_PH_CONTACT_Numbers]
+
+  - id: ph_report_may_cmr
+    type: one_to_one
+    sources: [A.dbo.PH_REPORT_MAY_CMR]
+    targets: [T.dbo.ph_report_may_cmr]
+
+  - id: plant_description
+    type: one_to_one
+    sources: [A.dbo.PlantDescription]
+    targets: [T.core.plant_description]
+
+  - id: production_incentive
+    type: one_to_one
+    sources: [A.dbo.Production_Incentive_Table]
+    targets: [T.core.production_incentive]
+
+  - id: project_director
+    type: one_to_one
+    sources: [A.dbo.ProjectDirectors]
+    targets: [T.project.project_director]
+
+  - id: project_mstr
+    type: one_to_one
+    sources: [A.dbo.ProjectIDs]
+    targets: [T.project.project_mstr]
+
+  - id: revenue
+    type: one_to_one
+    sources: [A.dbo.Revenue]
+    targets: [T.core.revenue]
+
+  - id: rfi_form_data
+    type: one_to_one
+    sources: [A.dbo.RFI_Form_Data]
+    targets: [T.dbo.RFI_form_data]
+
+  - id: drilling_sequence
+    type: one_to_one
+    sources: [A.dbo.SAP_DRILLING_SEQUENCE_Latest]
+    targets: [T.dsq.drilling_sequence]
+
+  - id: task_daily
+    type: one_to_one
+    sources: [A.dbo.task_daily]
+    targets: [T.well.task_daily]
+
+  - id: task_daily_attendance
+    type: one_to_one
+    sources: [A.dbo.task_daily_attendance]
+    targets: [T.dbo.task_daily_attendance]
+
+  - id: task_daily_combined
+    type: one_to_one
+    sources: [A.dbo.task_daily_combined]
+    targets: [T.dbo.task_daily_combined]
+
+  - id: task_daily_project
+    type: one_to_one
+    sources: [A.dbo.task_daily_project]
+    targets: [T.dbo.task_daily_project]
+
+  - id: task_daily_time_log
+    type: one_to_one
+    sources: [A.dbo.task_daily_time_log]
+    targets: [T.dbo.task_daily_time_log]
+
+  - id: wbs_master
+    type: one_to_one
+    sources: [A.dbo.WBS_Master_Tracker_]
+    targets: [T.wbs.WBS_master]
+
+  - id: well_classification
+    type: one_to_one
+    sources: [A.dbo.Well_Classification]
+    targets: [T.well.well_classification]
+
+  - id: wmr_conversion
+    type: one_to_one
+    sources: [A.dbo.WMR_Conversion]
+    targets: [T.well.wmr_conversion]
+
+  - id: wmr
+    type: transform
+    sources:
+      - A.dbo.WMR
+      - A.dbo.WellMonitoringReportOptimizedVersions
+      - A.dbo.WMR_Historical_Well_Master
+      - A.dbo.WMR_SQL_Bulk_Update
+      - A.dbo.WMR_STG_Bulk_Update_Dedup
+      - A.dbo.WMR_STG_DesignTracker_Flag
+      - A.dbo.WMR_STG_Document_Data
+      - A.dbo.WMR_STG_Marmul_Tracker
+      - A.dbo.WMR_STG_Nimr_Tracker
+      - A.dbo.WMR_STG_Project_Cluster
+      - A.dbo.WMR_STG_SAP_Extra_Filtered
+      - A.dbo.WMR_STG_SAP_History_Dedup
+      - A.dbo.WMR_STG_SAP_History_Raw
+      - A.dbo.WMR_STG_SSFD_Lookup
+      - A.dbo.WMR_STG_TaskPlan_Agg
+      - A.dbo.WMR_STG_TaskPlan_LCCC1040
+      - A.dbo.WMR_STG_TaskPlan_Parsed
+      - A.dbo.WMR_STG_WellType_Lookup
+      - A.dbo.WMR_STG_WMR_Base
+    targets:
+      - T.well.well_master
+      - T.well.well_progress
+    note: Business logic combines these sources; column names are compared as a guide only.
+
+  # ---- AppMasterEngDB_Local ---------------------------------------------------------
+
+  - id: engineering_acc_dump
+    type: one_to_one
+    sources: [B.dbo.EngineeringACCDump]
+    targets: [T.dbo.engineering_acc_dump]
+
+  - id: engineering_task_plan
+    type: one_to_one
+    sources: [B.dbo.EngineeringTaskPlan]
+    targets: [T.core.engineering_task_plan]
+
+  - id: engineering_well_priority
+    type: union
+    sources:
+      - B.dbo.EngWellPriority_Amal
+      - B.dbo.EngWellPriority_Marmul
+      - B.dbo.EngWellPriority_Nimr
+    targets: [T.eng.engineering_well_priority]
