@@ -64,6 +64,9 @@ size, creation date. **Refresh** reads them again.
     table); **Count exactly** runs `COUNT_BIG(*)` on each table and checks the rule again
   - the column comparison per target: each source column paired with its target column,
     type, nullability and key differences marked; filter by status or column name
+  - the keys of each target: primary key, every foreign key with the table it references
+    and that table's row count, and the tables that reference it; **Check references**
+    counts how many rows use each key, how many referenced rows are used, and orphans
 
 The selected table is in the URL (`?table=A.dbo.crews`), so a view can be shared or
 bookmarked, and Back / Forward work.
@@ -85,6 +88,8 @@ are guesses and are labelled as such; anything the rules cannot see
 | `GET /api/scope?refresh=true` | the in-scope source tables with live stats, targets and count status |
 | `GET /api/compare?table=A.dbo.Company` | mapping, live row counts and column comparison |
 | `GET /api/row-count?table=T.ref.crew` | exact `COUNT_BIG(*)` of one table in the plan |
+| `GET /api/keys?table=T.dbo.activity_codes_norms` | primary/unique keys, foreign keys it holds and ones pointing at it, with live row counts of the linked tables |
+| `GET /api/fk-check?table=...&fk=<name>` | exact counts for one foreign key: rows set, NULLs, distinct values used, orphans |
 
 Row counts come from `sys.partitions` (instant even for the 73 million row
 `ActivityTaskPlan`); the exact count is on demand because it reads the whole table.

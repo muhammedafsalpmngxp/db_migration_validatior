@@ -163,3 +163,45 @@ export const MAPPING_TYPE_HINT: Record<MappingType, string> = {
   transform: "Business logic reshapes several sources into several targets.",
   excluded: "In scope, but deliberately not migrated.",
 };
+
+// ---- Keys ------------------------------------------------------------------------
+
+export type LinkedTable = { ref: string; schema: string; table: string; rows: number; in_plan: boolean };
+
+export type ForeignKey = {
+  name: string;
+  /** outgoing: this table holds the key; incoming: another table points at this one */
+  direction: "outgoing" | "incoming";
+  parent: LinkedTable;
+  referenced: LinkedTable;
+  columns: string[];
+  ref_columns: string[];
+  enabled: boolean;
+  trusted: boolean;
+  on_delete: string;
+  on_update: string;
+};
+
+export type TableKeys = {
+  ref: string;
+  locked: boolean;
+  keys: { name: string; kind: "primary" | "unique"; index: string; columns: string[] }[];
+  foreign_keys: ForeignKey[];
+};
+
+export type ForeignKeyCheck = {
+  table: string;
+  fk: string;
+  child_rows: number;
+  filled_rows: number;
+  null_rows: number;
+  distinct_values: number | null;
+  orphan_rows: number;
+  seconds: number;
+};
+
+export const keysApi = {
+  keys: (ref: string) => get<TableKeys>(`/api/keys?table=${encodeURIComponent(ref)}`),
+  check: (ref: string, fk: string) =>
+    get<ForeignKeyCheck>(`/api/fk-check?table=${encodeURIComponent(ref)}&fk=${encodeURIComponent(fk)}`),
+};

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, fmt, fmtSize, type CompareResult, type Health, type Scope } from "@/lib/api";
 import { ColumnComparison, ColumnList } from "@/components/ColumnComparison";
+import { KeysView } from "@/components/KeysView";
 import { MappingView } from "@/components/MappingView";
 import { Overview } from "@/components/Overview";
 import { Sidebar } from "@/components/Sidebar";
@@ -164,6 +165,8 @@ export default function Home() {
                 )}
 
                 <MappingView key={`${sel.ref}|${scope?.read_at}`} result={result} onSelect={navigate} />
+
+                <KeysView key={`keys|${result.mapping.id}|${scope?.read_at}`} targets={result.mapping.targets} />
 
                 {result.mapping.type === "excluded" ? (
                   <ColumnList key={sel.ref} columns={result.source_columns} title={`Columns · ${sel.schema}.${sel.table}`} />

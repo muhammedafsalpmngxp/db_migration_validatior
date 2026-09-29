@@ -245,3 +245,133 @@ def table_columns(side, object_id):
         }
         for r in rows
     ]
+
+
+# ---- Keys: primary / unique keys and foreign keys ------------------------------------
+
+KEYS_SQL = """
+SELECT i.name, i.is_primary_key, i.type_desc, c.name AS [column]
+FROM sys.indexes i
+JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+WHERE i.object_id = ? AND (i.is_primary_key = 1 OR i.is_unique_constraint = 1) AND ic.key_ordinal > 0
+ORDER BY i.is_primary_key DESC, i.name, ic.key_ordinal
+"""
+
+# Both directions: keys this table holds (parent = this table) and keys pointing at it.
+# Row counts of both ends come from sys.partitions, like everywhere else.
+FOREIGN_KEYS_SQL = """
+SELECT fk.name, fk.parent_object_id, fk.referenced_object_id,
+       fk.is_disabled, fk.is_not_trusted,
+       fk.delete_referential_action_desc AS on_delete,
+       fk.update_referential_action_desc AS on_update,
+       OBJECT_SCHEMA_NAME(fk.parent_object_id) AS parent_schema,
+       OBJECT_NAME(fk.parent_object_id) AS parent_table,
+       OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS ref_schema,
+       OBJECT_NAME(fk.referenced_object_id) AS ref_table,
+       pc.name AS parent_column, rc.name AS ref_column,
+       (SELECT SUM(p.rows) FROM sys.partitions p
+         WHERE p.object_id = fk.parent_object_id AND p.index_id IN (0, 1)) AS parent_rows,
+       (SELECT SUM(p.rows) FROM sys.partitions p
+         WHERE p.object_id = fk.referenced_object_id AND p.index_id IN (0, 1)) AS ref_rows
+FROM sys.foreign_keys fk
+JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+WHERE fk.parent_object_id = ? OR fk.referenced_object_id = ?
+ORDER BY fk.name, fkc.constraint_column_id
+"""
+
+
+def table_keys(side, object_id):
+    """Primary/unique keys and foreign keys (outgoing and incoming) of one table.
+
+    Raises TableLocked when a load holds the table or a table it is linked to.
+    """
+    try:
+        key_rows = query(side, KEYS_SQL, (object_id,))
+        fk_rows = query(side, FOREIGN_KEYS_SQL, (object_id, object_id))
+    except pyodbc.Error as exc:
+        if is_lock_timeout(exc):
+            raise TableLocked(str(object_id)) from exc
+        raise
+
+    keys = {}
+    for r in key_rows:
+        k = keys.setdefault(r["name"], {
+            "name": r["name"],
+            "kind": "primary" if r["is_primary_key"] else "unique",
+            "index": r["type_desc"].lower(),
+            "columns": [],
+        })
+        k["columns"].append(r["column"])
+
+    fks = {}
+    for r in fk_rows:
+        f = fks.setdefault(r["name"], {
+            "name": r["name"],
+            "direction": "outgoing" if r["parent_object_id"] == object_id else "incoming",
+            "parent": {"schema": r["parent_schema"], "table": r["parent_table"],
+                       "rows": int(r["parent_rows"] or 0)},
+            "referenced": {"schema": r["ref_schema"], "table": r["ref_table"],
+                           "rows": int(r["ref_rows"] or 0)},
+            "columns": [],
+            "ref_columns": [],
+            "enabled": not r["is_disabled"],
+            "trusted": not r["is_not_trusted"],
+            "on_delete": r["on_delete"].lower().replace("_", " "),
+            "on_update": r["on_update"].lower().replace("_", " "),
+        })
+        f["columns"].append(r["parent_column"])
+        f["ref_columns"].append(r["ref_column"])
+
+    return {"keys": list(keys.values()), "foreign_keys": list(fks.values())}
+
+
+def foreign_key_check(side, fk):
+    """How the child table's key values relate to the referenced table, counted exactly.
+
+    `fk` is one entry from `table_keys` (names from the live catalog). Returns child rows,
+    rows with the key filled in, distinct key values used, and orphans - filled-in values
+    with no matching row in the referenced table (0 unless the key is disabled/untrusted).
+    """
+    child = f"{_quote(fk['parent']['schema'])}.{_quote(fk['parent']['table'])}"
+    parent = f"{_quote(fk['referenced']['schema'])}.{_quote(fk['referenced']['table'])}"
+    cols = list(zip(fk["columns"], fk["ref_columns"]))
+    filled = " AND ".join(f"c.{_quote(c)} IS NOT NULL" for c, _ in cols)
+    join = " AND ".join(f"p.{_quote(r)} = c.{_quote(c)}" for c, r in cols)
+    distinct = (f"COUNT_BIG(DISTINCT c.{_quote(cols[0][0])})" if len(cols) == 1
+                else "CAST(NULL AS BIGINT)")
+    sql = f"""
+        SELECT COUNT_BIG(*) AS child_rows,
+               SUM(CASE WHEN {filled} THEN 1 ELSE 0 END) AS filled_rows,
+               {distinct} AS distinct_values,
+               SUM(CASE WHEN {filled} AND p.{_quote(cols[0][1])} IS NULL
+                        THEN 1 ELSE 0 END) AS orphan_rows
+        FROM {child} c
+        LEFT JOIN {parent} p ON {join}
+    """
+    # A foreign key always references a primary or unique key, so the join matches at
+    # most one parent row and cannot inflate the child counts.
+    started = time.time()
+    with closing(connect(side)) as con:
+        con.timeout = config.MSSQL_COUNT_TIMEOUT
+        cur = con.cursor()
+        cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
+        try:
+            row = cur.execute(sql).fetchone()
+        except pyodbc.Error as exc:
+            if is_lock_timeout(exc):
+                raise TableLocked(child) from exc
+            raise
+    child_rows, filled_rows, distinct_values, orphan_rows = (
+        None if v is None else int(v) for v in row
+    )
+    return {
+        "child_rows": child_rows,
+        "filled_rows": filled_rows or 0,
+        "null_rows": child_rows - (filled_rows or 0),
+        "distinct_values": distinct_values,
+        "orphan_rows": orphan_rows or 0,
+        "seconds": round(time.time() - started, 2),
+    }

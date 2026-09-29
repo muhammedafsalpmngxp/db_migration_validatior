@@ -255,3 +255,61 @@ def row_count(table: str = Query(..., description="Any table in the plan, e.g. T
             )
         raise
     return {"ref": table, "rows": rows, "seconds": seconds, "metadata_rows": entry["rows"]}
+
+
+def _plan_table(table):
+    """A table reference from the query string, required to be in the plan and to exist."""
+    try:
+        ref = plan_mod.parse_ref(table)
+    except plan_mod.PlanError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not get_plan().contains(ref):
+        raise HTTPException(status_code=404, detail=f"{ref.ref} is not in the migration plan.")
+    entry = _entry(_live_tables(), ref)
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"{ref.ref} does not exist.")
+    return ref, entry
+
+
+@app.get("/api/keys")
+def table_keys(table: str = Query(..., description="A table in the plan, e.g. T.dbo.activity_codes_norms")):
+    """Primary/unique keys of one table, the foreign keys it holds, and the ones pointing
+    at it - with live row counts of every linked table."""
+    ref, entry = _plan_table(table)
+    if entry["locked"]:
+        return {"ref": ref.ref, "locked": True, "keys": [], "foreign_keys": []}
+    try:
+        keys = db.table_keys(ref.side, entry["object_id"])
+    except db.TableLocked:
+        return {"ref": ref.ref, "locked": True, "keys": [], "foreign_keys": []}
+
+    plan = get_plan()
+    for fk in keys["foreign_keys"]:
+        for end in ("parent", "referenced"):
+            t = fk[end]
+            t["ref"] = f"{ref.side}.{t['schema']}.{t['table']}"
+            t["in_plan"] = plan.contains(plan_mod.parse_ref(t["ref"]))
+    return {"ref": f"{ref.side}.{entry['schema']}.{entry['table']}", "locked": False, **keys}
+
+
+@app.get("/api/fk-check")
+def foreign_key_check(
+    table: str = Query(..., description="The table holding the foreign key"),
+    fk: str = Query(..., description="Foreign key constraint name"),
+):
+    """Exact counts for one foreign key: rows filled in, distinct values, orphans."""
+    ref, entry = _plan_table(table)
+    locked = HTTPException(status_code=409, detail="The table is locked by another session; try again later.")
+    if entry["locked"]:
+        raise locked
+    try:
+        found = next(
+            (f for f in db.table_keys(ref.side, entry["object_id"])["foreign_keys"]
+             if f["name"] == fk and f["direction"] == "outgoing"),
+            None,
+        )
+        if not found:
+            raise HTTPException(status_code=404, detail=f"{ref.ref} has no foreign key {fk!r}.")
+        return {"table": ref.ref, "fk": fk, **db.foreign_key_check(ref.side, found)}
+    except db.TableLocked:
+        raise locked
