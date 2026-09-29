@@ -161,13 +161,77 @@ def rename_hints(m, entry_of, comparison):
     return hints
 
 
-def build_facts(m, members, row_check, saved, comparisons, keys_by_target, hints):
+LINK_VERDICT = {"ok": "identical", "review": "review", "problems": "problems"}
+_ORDER = ("identical", "review", "problems")
+
+
+def overall_verdict(saved, links):
+    """The worse of the data check's verdict and the key mapping check's verdict. Without a
+    data check the table is not_checked, unless the links already show something wrong."""
+    data = (saved or {}).get("status")
+    link = LINK_VERDICT.get((links or {}).get("status"))
+    if data not in _ORDER:
+        return link if link in ("review", "problems") else "not_checked"
+    if link in _ORDER and _ORDER.index(link) > _ORDER.index(data):
+        return link
+    return data
+
+
+def _link_facts(links):
+    """The key mapping check: does each link column point at the right row of its list?"""
+    status = (links or {}).get("status")
+    if not links:
+        return ["key_links: verdict=not_checked, reason=The link check has not been run for this table."]
+    if status == "none":
+        return ["key_links: none (the new table has no links to other lists)"]
+    if status in ("skipped", "error"):
+        return [f"key_links: verdict=not_checked, reason={_clean(links.get('headline') or '')}"]
+    key = links.get("key")
+    paired = (f"{key['source']} -> {key['target']}" if key
+              else "their other columns with the same values (no column is unique on both sides)")
+    lines = [f"key_links: verdict={LINK_VERDICT.get(status, 'not_checked')}, rows_paired_on={paired}"]
+    fields = ["new_column", "list", "old_column", "checked_through", "result", "correct", "written_differently",
+              "empty_both", "not_filled", "not_in_list", "wrong", "id_without_old_value"]
+    rows, unchecked = [], []
+    for lk in links.get("links", []):
+        b = lk.get("buckets")
+        list_name = f"{lk['ref']['schema']}.{lk['ref']['table']}"
+        if not b:
+            unchecked.append(f"{lk['column']} -> {list_name}: {_clean(lk.get('reason') or 'not checked')}")
+            continue
+        rows.append({"new_column": lk["column"], "list": list_name, "old_column": lk.get("source"),
+                     "checked_through": lk.get("via"), "result": lk["verdict"], "correct": b["correct"],
+                     "written_differently": b["case_only"], "empty_both": b["both_empty"],
+                     "not_filled": b["not_filled"], "not_in_list": b["not_in_list"], "wrong": b["wrong"],
+                     "id_without_old_value": b["added"]})
+    if rows:
+        lines += _toon_rows("links", fields, rows)
+        # The data check lists these old columns as "not compared" when no new column has
+        # their name; the link check compared them.
+        lines.append("old_columns_compared_by_link_check: " + _names(
+            f"{r['old_column']} -> {r['new_column']}" for r in rows if r["old_column"]))
+    lines += [f"link_not_checked: {u}" for u in unchecked]
+    by_sev = {"error": [], "review": []}
+    for f in links.get("findings", []):
+        if f["severity"] in by_sev:
+            text = _clean(f["text"])
+            by_sev[f["severity"]].append(_redact(text) if f.get("column") and is_sensitive(f["column"]) else text)
+    for sev, label in (("error", "link_problems"), ("review", "link_review")):
+        items = by_sev[sev][:MAX_FINDINGS]
+        if items:
+            lines.append(f"{label}[{len(items)}]:")
+            lines += [f"  - {t}" for t in items]
+    return lines
+
+
+def build_facts(m, members, row_check, saved, comparisons, keys_by_target, hints, links=None):
     """The fact sheet for one mapping, as TOON-style text."""
     srcs = [x for x in members if x["kind"] == "old"]
     tgts = [x for x in members if x["kind"] == "new"]
     lines = [
         f"table: {' + '.join(x['name'] for x in srcs)} -> {' + '.join(x['name'] for x in tgts) or 'nothing (not moved)'}",
         f"mapping: {m.type}",
+        f"overall_verdict: {overall_verdict(saved, links)}",
     ]
     if m.note:
         lines.append(f"mapping_note: {_clean(m.note)}")
@@ -306,19 +370,23 @@ def build_facts(m, members, row_check, saved, comparisons, keys_by_target, hints
             continue
         pk = next((k for k in keys["keys"] if k["kind"] == "primary"), None)
         # The same link declared more than once is shown once, with how many rules declare it.
-        links = {}
+        declared = {}
         for f in keys["foreign_keys"]:
             if f["direction"] == "outgoing":
                 text = (f"{', '.join(f['columns'])} -> {f['referenced']['schema']}.{f['referenced']['table']} "
                         f"({f['referenced']['rows']} rows)")
-                links[text] = links.get(text, 0) + 1
-        out = [t if n == 1 else f"{t} [declared by {n} identical rules]" for t, n in links.items()]
+                declared[text] = declared.get(text, 0) + 1
+        out = [t if n == 1 else f"{t} [declared by {n} identical rules]" for t, n in declared.items()]
         incoming = [f"{f['parent']['schema']}.{f['parent']['table']}" for f in keys["foreign_keys"]
                     if f["direction"] == "incoming"]
         lines.append(f"keys {tname}: primary_key={', '.join(pk['columns']) if pk else 'none'}")
         lines.append(f"  links_to_other_lists: {_names(out, 10)}")
         if incoming:
             lines.append(f"  used_by_other_tables: {_names(incoming, 10)}")
+
+    # Whether each link column points at the right row (app/keymap.py).
+    if m.type not in ("transform", "excluded"):
+        lines += _link_facts(links)
     return "\n".join(lines)
 
 
@@ -444,8 +512,10 @@ class Store:
                 pass
 
 
-def make_result(mapping_id, check, facts, answer, usage, bad, attempts):
-    verdict = (check or {}).get("status")
+def make_result(mapping_id, check, facts, answer, usage, bad, attempts, links=None):
+    # The worse of the two checks: a table whose values match but whose links point at the
+    # wrong rows is not "ok".
+    verdict = overall_verdict(check, links)
     return {
         "mapping": mapping_id,
         "status": STATUS_OF_VERDICT.get(verdict, "not_checked"),
@@ -459,6 +529,7 @@ def make_result(mapping_id, check, facts, answer, usage, bad, attempts):
         "tokens": usage,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "data_check_at": (check or {}).get("checked_at"),
+        "key_mapping_at": (links or {}).get("checked_at"),
         "facts": facts,
         "facts_hash": hashlib.sha256(facts.encode("utf-8")).hexdigest()[:16],
     }

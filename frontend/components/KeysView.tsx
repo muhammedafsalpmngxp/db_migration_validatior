@@ -1,10 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { fmt, keysApi, type ForeignKey, type ForeignKeyCheck, type LinkedTable, type Member, type TableKeys } from "@/lib/api";
+import { Fragment, useEffect, useState } from "react";
+import {
+  fmt, keymapApi, keysApi, type ForeignKey, type ForeignKeyCheck, type KeyLink, type KeyMapping, type LinkedTable,
+  type Member, type TableKeys,
+} from "@/lib/api";
+import { KeyRowsPanel, LinkResult, MappingSummary } from "./KeyMapping";
 import { Badge, Card, ErrorBox, SideTag, Spinner } from "./ui";
 
 type Check = { state: "loading" } | { state: "done"; data: ForeignKeyCheck } | { state: "error"; message: string };
+
+/** The mapping check (does each link point at the right row?) of the table, when it has one. */
+type MappingState = {
+  mappingId: string;
+  result: KeyMapping | null;
+  loaded: boolean;
+  running: boolean;
+  error: string | null;
+  run: () => void;
+};
 
 function TableName({ t }: { t: LinkedTable }) {
   return (
@@ -44,10 +58,11 @@ function Usage({ check, fk }: { check?: Check; fk: ForeignKey }) {
   );
 }
 
-function TargetKeys({ target }: { target: Member }) {
+function TargetKeys({ target, mapping }: { target: Member; mapping?: MappingState }) {
   const [data, setData] = useState<TableKeys | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checks, setChecks] = useState<Record<string, Check>>({});
+  const [rows, setRows] = useState<{ link: KeyLink; filter: string } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -82,20 +97,45 @@ function TargetKeys({ target }: { target: Member }) {
   const incoming = data.foreign_keys.filter((f) => f.direction === "incoming");
   const pk = data.keys.find((k) => k.kind === "primary");
   const checking = Object.values(checks).some((c) => c.state === "loading");
+  const showMapping = !!mapping && outgoing.length > 0;
+  // A column can carry the same key twice (two identical constraints): one result, shown once.
+  const firstFk = new Map<string, string>();
+  for (const f of outgoing) {
+    const c = f.columns.length === 1 ? f.columns[0].toLowerCase() : null;
+    if (c && !firstFk.has(c)) firstFk.set(c, f.name);
+  }
+  const linkOf = (fk: ForeignKey) =>
+    fk.columns.length === 1
+      ? mapping?.result?.links?.find((l) => l.column.toLowerCase() === fk.columns[0].toLowerCase())
+      : undefined;
+  const repeatOf = (fk: ForeignKey) => fk.columns.length === 1 && firstFk.get(fk.columns[0].toLowerCase()) !== fk.name;
 
   return (
     <Card
       title={title}
       aside={outgoing.length > 0 && (
-        <button
-          type="button"
-          disabled={checking}
-          onClick={() => outgoing.forEach(check)}
-          className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:border-accent hover:text-accent disabled:opacity-50"
-          title="Count, for each foreign key, how many rows use it and whether any value is missing from the referenced table"
-        >
-          {checking ? <Spinner small label="Checking…" /> : "Check references"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {showMapping && (
+            <button
+              type="button"
+              disabled={mapping.running}
+              onClick={mapping.run}
+              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50 dark:text-bg"
+              title="For every link column: find the source column it was made from and check, row by row, that the id points at the row holding the source value"
+            >
+              {mapping.running ? "Checking…" : mapping.result ? "Check mapping again" : "Check mapping"}
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={checking}
+            onClick={() => outgoing.forEach(check)}
+            className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:border-accent hover:text-accent disabled:opacity-50"
+            title="Count, for each foreign key, how many rows use it and whether any value is missing from the referenced table"
+          >
+            {checking ? <Spinner small label="Checking…" /> : "Check references"}
+          </button>
+        </div>
       )}
     >
       <div className="flex flex-col gap-4">
@@ -115,6 +155,10 @@ function TargetKeys({ target }: { target: Member }) {
             </span>
           ))}
         </div>
+
+        {showMapping && (
+          <MappingSummary result={mapping.result} loaded={mapping.loaded} running={mapping.running} error={mapping.error} />
+        )}
 
         <div>
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
@@ -136,36 +180,60 @@ function TargetKeys({ target }: { target: Member }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {outgoing.map((fk) => (
-                    <tr key={fk.name} className="border-t border-border align-top">
-                      <td className="px-3 py-2"><Cols names={fk.columns} /></td>
-                      <td className="py-2 pr-3">
-                        <TableName t={fk.referenced} />
-                        <div className="mt-0.5 pl-7 text-xs text-muted">. <Cols names={fk.ref_columns} /></div>
-                      </td>
-                      <td className="num py-2 pr-3 text-right font-medium">{fmt(fk.referenced.rows)}</td>
-                      <td className="py-2 pr-3">
-                        <FkState fk={fk} />
-                        <div className="mt-1 max-w-56 truncate text-[11px] text-muted" title={`${fk.name} · on delete ${fk.on_delete} · on update ${fk.on_update}`}>{fk.name}</div>
-                      </td>
-                      <td className="py-2 pr-3"><Usage check={checks[fk.name]} fk={fk} /></td>
-                      <td className="py-2 pr-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => check(fk)}
-                          disabled={checks[fk.name]?.state === "loading"}
-                          className="text-xs text-accent hover:underline disabled:opacity-50"
-                        >
-                          Check
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {outgoing.map((fk) => {
+                    const link = linkOf(fk);
+                    const repeat = repeatOf(fk);
+                    return (
+                      <Fragment key={fk.name}>
+                        <tr className="border-t border-border align-top">
+                          <td className="px-3 py-2"><Cols names={fk.columns} /></td>
+                          <td className="py-2 pr-3">
+                            <TableName t={fk.referenced} />
+                            <div className="mt-0.5 pl-7 text-xs text-muted">. <Cols names={fk.ref_columns} /></div>
+                          </td>
+                          <td className="num py-2 pr-3 text-right font-medium">{fmt(fk.referenced.rows)}</td>
+                          <td className="py-2 pr-3">
+                            <FkState fk={fk} />
+                            <div className="mt-1 max-w-56 truncate text-[11px] text-muted" title={`${fk.name} · on delete ${fk.on_delete} · on update ${fk.on_update}`}>{fk.name}</div>
+                          </td>
+                          <td className="py-2 pr-3"><Usage check={checks[fk.name]} fk={fk} /></td>
+                          <td className="py-2 pr-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => check(fk)}
+                              disabled={checks[fk.name]?.state === "loading"}
+                              className="text-xs text-accent hover:underline disabled:opacity-50"
+                            >
+                              Check
+                            </button>
+                          </td>
+                        </tr>
+                        {link && !mapping?.running && (
+                          <tr className="align-top">
+                            <td colSpan={6} className="px-3 pb-3">
+                              {repeat ? (
+                                <p className="text-xs text-muted">
+                                  Mapping: the same column as the key above, so its result there covers this one.
+                                </p>
+                              ) : (
+                                <div className="rounded-lg border border-border bg-surface-2/50 px-3 py-2">
+                                  <LinkResult link={link} onOpen={(filter) => setRows({ link, filter })} />
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </div>
+        {rows && mapping && (
+          <KeyRowsPanel mapping={mapping.mappingId} link={rows.link} initialFilter={rows.filter} onClose={() => setRows(null)} />
+        )}
 
         {incoming.length > 0 && (
           <div>
@@ -192,13 +260,45 @@ function TargetKeys({ target }: { target: Member }) {
 }
 
 /** Keys of every target table of the mapping: primary key, foreign keys with the row
- *  counts of the tables they reference, and the tables that reference it. */
-export function KeysView({ targets }: { targets: Member[] }) {
+ *  counts of the tables they reference, and the tables that reference it. With a mapping
+ *  id, also the mapping check: does every link point at the row holding the source value? */
+export function KeysView({ targets, mappingId }: { targets: Member[]; mappingId?: string }) {
   const shown = targets.filter((t) => t.exists);
+  const [result, setResult] = useState<KeyMapping | null>(null);
+  const [loaded, setLoaded] = useState(!mappingId);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!mappingId) return;
+    let live = true;
+    keymapApi.saved(mappingId)
+      .then((d) => { if (live) setResult(d.result); })
+      .catch((e) => { if (live) setError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (live) setLoaded(true); });
+    return () => { live = false; };
+  }, [mappingId]);
+
+  async function run() {
+    if (!mappingId) return;
+    setRunning(true);
+    setError(null);
+    try {
+      setResult(await keymapApi.run(mappingId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  }
+
   if (!shown.length) return null;
+  // The check covers the mapping's first target: the table its rows are copied into.
+  const checked = targets[0];
+  const state: MappingState | undefined = mappingId ? { mappingId, result, loaded, running, error, run } : undefined;
   return (
     <div className="flex flex-col gap-4">
-      {shown.map((t) => <TargetKeys key={t.ref} target={t} />)}
+      {shown.map((t) => <TargetKeys key={t.ref} target={t} mapping={t.ref === checked?.ref ? state : undefined} />)}
     </div>
   );
 }

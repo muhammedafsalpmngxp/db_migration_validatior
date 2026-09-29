@@ -412,3 +412,105 @@ export const aiApi = {
     return res.json() as Promise<AiSummary>;
   },
 };
+
+// ---- Key mapping check (backend/app/keymap.py) ---------------------------------------
+
+export type KeyBucket =
+  | "correct" | "case_only" | "both_empty" | "not_filled" | "not_in_list" | "wrong" | "added" | "orphan" | "old_broken";
+export type KeyStatus = "ok" | "review" | "problems" | "none" | "skipped" | "error" | "not_checked";
+export type KeyValueGroup = {
+  source: string | null;
+  old: string | null;
+  target_id: string | null;
+  target_value: string | null;
+  rows: number;
+};
+export type KeyAgreement =
+  "agree" | "case_only" | "both_empty" | "code_not_linked" | "code_not_in_list" | "code_empty" | "disagree" | "orphan";
+
+export type KeyLink = {
+  fk: string;
+  column: string;
+  ref: { schema: string; table: string; key: string | null; rows: number | null };
+  /** the source column this key was made from */
+  source: string | null;
+  source_type: string | null;
+  /** pairing: from the column comparison; values: found because its values are in the list */
+  found_by: "pairing" | "values" | null;
+  label: string | null;
+  /** lookup: id translated to a list column; code: value stored as it is; meaning: old list vs new list */
+  mode: "lookup" | "code" | "meaning" | null;
+  via: string | null;
+  copy: string | null;
+  old: { side: Side; schema: string; table: string; key: string; label: string } | null;
+  coverage: { distinct: number; found: number; sampled: boolean } | null;
+  verdict: "ok" | "review" | "problem" | "not_checked";
+  reason?: string;
+  /** one plain sentence: how many rows point at the right row */
+  summary?: string;
+  buckets?: Record<KeyBucket, number>;
+  compared?: number;
+  groups?: Partial<Record<KeyBucket, KeyValueGroup[]>>;
+  distinct?: Partial<Record<KeyBucket, number>>;
+  remainder?: {
+    source_rows: number; target_rows: number; same: number; only_in_source: number; only_in_target: number;
+    examples: { source: ValueExample[]; target: ValueExample[] };
+  } | null;
+  agreement?: {
+    column: string;
+    counts: Record<KeyAgreement, number>;
+    examples: { copy: string | null; target_id: string | null; target_value: string | null; rows: number }[];
+  } | null;
+  duplicates?: { values: number; examples: ValueExample[] } | null;
+  findings: { severity: Severity; text: string }[];
+};
+
+export type KeyMapping = {
+  mapping: string;
+  status: KeyStatus;
+  headline: string;
+  checked_at: string;
+  seconds: number;
+  source?: string;
+  target?: string;
+  method?: "key" | "columns" | null;
+  key?: { source: string; target: string } | null;
+  rows?: {
+    source: number; target: number; matched: number; missing_in_target?: number; extra_in_target?: number;
+    anchor_columns?: number; unpaired_source?: number; unpaired_target?: number;
+  } | null;
+  links: KeyLink[];
+  findings: { severity: Severity; text: string; column?: string }[];
+};
+
+export type KeyRows = {
+  column: string;
+  source: string;
+  via: string;
+  mode: KeyLink["mode"];
+  method: "key" | "columns" | null;
+  key: { source: string; target: string } | null;
+  filter: string;
+  page: number;
+  size: number;
+  total: number;
+  sensitive: boolean;
+  hidden: boolean;
+  rows: { row: string | null; source: string | null; old: string | null; target_id: string | null;
+          target_value: string | null; status: KeyBucket }[];
+};
+
+export type KeyRowsQuery = { mapping: string; column: string; filter: string; page: number; size: number; reveal: boolean };
+
+export const keymapApi = {
+  saved: (mapping: string) =>
+    get<{ result: KeyMapping | null }>(`/api/key-mapping/saved?mapping=${encodeURIComponent(mapping)}`),
+  run: (mapping: string) => get<KeyMapping>(`/api/key-mapping?mapping=${encodeURIComponent(mapping)}&refresh=true`),
+  rows: (p: KeyRowsQuery) => {
+    const u = new URLSearchParams({
+      mapping: p.mapping, column: p.column, filter: p.filter, page: String(p.page), size: String(p.size),
+      reveal: String(p.reveal),
+    });
+    return get<KeyRows>(`/api/key-mapping/rows?${u.toString()}`);
+  },
+};

@@ -19,6 +19,7 @@ backend/                      FastAPI + pyodbc, read-only against SQL Server
   app/compare.py              column alignment and row count rules
   app/datacheck.py            value by value comparison (the Data check)
   app/values.py               the values panel behind a column
+  app/keymap.py               key mapping check: does each foreign key point at the right row?
   app/ai.py                   AI summary: fact sheet, OpenAI call, number check
   app/ai_prompt.py            the AI's instructions and answer shape
   app/main.py                 HTTP API
@@ -115,6 +116,35 @@ real values live from both databases:
 Columns that look like contact details (email, phone, GSM, fax) are hidden until **Show
 values** is pressed. The app has no login, so anyone who can open it can press it.
 
+### Mapping check: does every link point at the right row?
+
+A new table often stores a number where the old one stored text: `New_Crew_code`
+`'YLM-0401'` became `crew_type_id` 395, row 395 of `ref.crew_type`. **Check mapping** in the
+Keys card (also part of **Run all data checks**) tests every single-column foreign key of
+the target table:
+
+1. **The source column it was made from** - the column the pairing gave it, or else the
+   source text column whose values are found in the referenced table (`Unit` → `uom_id`:
+   16 of 16 values are in `ref.uom.uom_code`, marked *found by its values*).
+2. **The list column that holds the source value** - the one holding most of the source's
+   values (`crew_type_code`, `uom_code`), or the key itself when a code was copied as it
+   is. A number copied from an old list that was migrated too is compared through a label
+   both lists keep: old `EquipmentType` 396 `MDG01` must be new `equipment_type` 396 `MDG01`.
+3. **Row by row**, the target id is turned back into that value and compared with the
+   source value of the same row. Rows are paired on the data check's key; a table without
+   one is paired on its other columns that hold the same values on both sides (a pair is
+   made only when those values are unique on both sides), and rows that still cannot be
+   paired are compared by value counts. Every paired row lands in one bucket: **correct**,
+   written differently (`'No'` → `no`: the list keeps one spelling), both empty, **not
+   filled** (the value is in the list, the id is empty), **not in the list**, **wrong id**,
+   id without a source value, id not in the list.
+4. **Copy column**: when the target also keeps the value itself (`new_crew_code` next to
+   `crew_type_id`), that the two agree on every target row.
+
+Each foreign key row then shows its result, with counts that open the rows behind them
+(source value, target id, the value that id points at). Results are kept in
+`backend/.cache/key_mapping_checks.json`; the AI summary uses them too.
+
 ### AI summary: the result in plain words
 
 The **AI summary** card at the top of each table page writes one short paragraph, plus up
@@ -131,9 +161,10 @@ decides nothing:
    worth_checking.
 3. Every number in the answer is checked against the fact sheet. An answer with a number
    that is not there is sent back once to be rewritten, and flagged on the card if it still
-   is. The status badge comes from the data check, never from the AI.
+   is. The status badge comes from the data check and the mapping check (the worse of the
+   two), never from the AI.
 4. The summary is saved in `backend/.cache/ai_summaries.json` and marked out of date when
-   the data check is run again.
+   the data check or the mapping check is run again.
 
 Never sent: connection details, whole tables or rows, and values of email / phone columns.
 **See what is sent to the AI** on the card shows the exact text, and works before a key
@@ -166,6 +197,9 @@ are guesses and are labelled as such; anything the rules cannot see
 | `GET /api/data-checks` | every mapping's last verdict, and the background run's progress |
 | `POST /api/data-checks/run` | check every mapping in the background |
 | `GET /api/data-check/values?mapping=crew&column=Code&view=rows` | the real values of one column: `view=rows` (side by side) or `counts`; `filter`, `q`, `page`, `size`, `reveal`, `format=csv` |
+| `GET /api/key-mapping?mapping=activity_codes_norms&refresh=true` | run the mapping check: for every foreign key, the source column it was made from and whether each id points at the right row |
+| `GET /api/key-mapping/saved?mapping=activity_codes_norms` | the saved mapping check only, never runs |
+| `GET /api/key-mapping/rows?mapping=...&column=crew_type_id&filter=problems` | the rows behind one link (`filter`: `problems`, `all`, or a bucket such as `wrong`, `not_filled`); `page`, `size`, `reveal` |
 | `GET /api/ai/status` | whether AI summaries are set up (key and model) |
 | `GET /api/ai/facts?mapping=crew` | the exact fact sheet that is (or would be) sent to the AI; calls no AI |
 | `GET /api/ai/summary/saved?mapping=crew` | the saved summary, or null; calls no AI |

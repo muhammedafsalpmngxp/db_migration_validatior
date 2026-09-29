@@ -172,7 +172,7 @@ export default function Home() {
 
                 <DataCheck key={`data|${result.mapping.id}`} mappingId={result.mapping.id} mappingType={result.mapping.type} />
 
-                <KeysView key={`keys|${result.mapping.id}|${scope?.read_at}`} targets={result.mapping.targets} />
+                <KeysView key={`keys|${result.mapping.id}|${scope?.read_at}`} targets={result.mapping.targets} mappingId={result.mapping.id} />
 
                 {result.mapping.type === "excluded" ? (
                   <ColumnList key={sel.ref} columns={result.source_columns} title={`Columns · ${sel.schema}.${sel.table}`} />

@@ -122,7 +122,7 @@ export function DataOverview({ mappings, data, onSelect }: {
           ) : null}
           <button type="button" onClick={runAll} disabled={running}
             className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50 dark:text-bg"
-            title="Compare every value of every mapping, in the background (a few minutes)">
+            title="Compare every value of every mapping, and check that every link points at the right row, in the background (a few minutes)">
             {running ? "Checking…" : checked ? "Re-run all data checks" : "Run all data checks"}
           </button>
         </div>

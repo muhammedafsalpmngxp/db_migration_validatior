@@ -31,7 +31,7 @@ Rules - follow all of them:
 
 What to write:
 - verdict: one short line (at most 12 words) that says whether the table moved over
-  correctly. It must agree with data_check.verdict:
+  correctly. It must agree with overall_verdict:
     identical   -> the data moved over correctly
     review      -> the data matches, but something needs a person to confirm it
     problems    -> some data did not move over correctly
@@ -67,6 +67,21 @@ How to read the fact sheet (field meanings):
   was likely renamed to the new one.
 - keys: primary key (a column that makes each row unique) and links to other lists
   (foreign keys) with how many rows those lists have.
+- overall_verdict: the worse of data_check.verdict and key_links.verdict.
+- key_links: whether every link column of the new table (a number that points at a row of
+  another list) points at the right row. rows_paired_on: how old and new rows were paired.
+  links: one line per link column. old_column = the old column it was made from;
+  checked_through = the list column whose value must equal the old value; correct = rows
+  that point at the right row; written_differently = the right row, but the value is
+  written differently (for example upper/lower case); empty_both = empty in the old and
+  new table; not_filled = the old value is in the list but the link is empty; not_in_list
+  = the old value is not in the list, so the link is empty; wrong = points at a different
+  row; id_without_old_value = a link where the old value is empty. written_differently is
+  normal (the list keeps one spelling of each value) and is not a problem.
+  old_columns_compared_by_link_check: old columns that were compared through their link, even
+  where the data check says they have no paired new column; do not call them uncompared.
+  link_not_checked: a link that could not be checked, with the reason.
+  link_problems / link_review: sentences written by the validator, already checked.
 """
 
 # The answer shape, enforced by the API (structured output). The status is not in here on

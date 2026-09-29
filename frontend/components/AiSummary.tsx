@@ -121,7 +121,8 @@ export function AiSummary({ mappingId }: { mappingId: string }) {
       {!busy && !result && (
         <p className="text-sm text-muted">
           Writes a short, plain-words explanation of this table from the measured checks below: row counts, the value
-          check, the column comparison, and the keys. Nothing is written until you press Generate summary.
+          check, the column comparison, the keys and the mapping check. Nothing is written until you press Generate
+          summary.
         </p>
       )}
 
@@ -129,7 +130,8 @@ export function AiSummary({ mappingId }: { mappingId: string }) {
         <div className="flex flex-col gap-3">
           {result.stale && (
             <p className="rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn">
-              The data check was run again after this summary was written. Regenerate to use the latest results.
+              The data check or the mapping check was run again after this summary was written. Regenerate to use
+              the latest results.
             </p>
           )}
           <div>

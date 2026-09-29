@@ -70,6 +70,9 @@ DATA_CHECK_TIMEOUT = int(_env("DATA_CHECK_TIMEOUT", "900"))
 # The last result of each mapping, kept across restarts.
 DATA_CHECK_FILE = Path(_env("DATA_CHECK_FILE", BACKEND_DIR / ".cache" / "data_checks.json"))
 
+# Key mapping check (do the foreign keys point at the right rows? see app/keymap.py).
+KEY_MAPPING_FILE = Path(_env("KEY_MAPPING_FILE", BACKEND_DIR / ".cache" / "key_mapping_checks.json"))
+
 # AI summary (app/ai.py). Only OpenAI is wired up; an empty key turns the feature off.
 LLM_PROVIDER = _env("LLM_PROVIDER", "openai").lower()
 OPENAI_API_KEY = _env("OPENAI_API_KEY", "")

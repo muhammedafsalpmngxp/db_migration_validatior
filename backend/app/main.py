@@ -363,10 +363,85 @@ def data_checks():
 
 @app.post("/api/data-checks/run")
 def data_checks_run():
-    """Check every mapping in the background, one after another."""
+    """Check every mapping in the background, one after another: the data check, then the
+    key mapping check (each kept in its own store)."""
     mappings = [m for m in get_plan().mappings]
-    started = _checks.run_all(mappings, _run_data_check)
+    started = _checks.run_all(mappings, _run_all_checks)
     return {"started": started, "job": dict(_checks.job)}
+
+
+def _run_all_checks(m):
+    result = _run_data_check(m)
+    try:
+        _keymaps.put(_run_key_mapping(m))
+    except Exception as exc:  # the data check result is still saved
+        logger.error("key mapping check of %s failed: %s", m.id, exc)
+        _keymaps.put(_failed_key_mapping(m, exc))
+    return result
+
+
+# ---- Key mapping check: do the foreign keys point at the right rows? ----------------------
+
+from datetime import datetime, timezone  # noqa: E402
+
+from . import keymap  # noqa: E402
+
+_keymaps = datacheck.Store(config.KEY_MAPPING_FILE)
+
+
+def _run_key_mapping(m):
+    live = _live_tables()
+    return keymap.check(m, lambda member: _entry(live, member.ref), get_plan())
+
+
+def _failed_key_mapping(m, exc):
+    return {"mapping": m.id, "type": m.type, "status": "error", "headline": f"Check failed: {exc}", "links": [],
+            "findings": [{"severity": "error", "text": f"Check failed: {exc}"}],
+            "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+
+
+@app.get("/api/key-mapping")
+def key_mapping(mapping: str = Query(..., description="Mapping id, e.g. activity_codes_norms"), refresh: bool = False):
+    """The key mapping check of one mapping: for every foreign key of the target, the source
+    column it was made from and whether each id points at the row holding the source value.
+    Returns the saved result, or runs the check when asked (or when there is none yet)."""
+    m = _mapping_by_id(mapping)
+    saved = _keymaps.get(m.id)
+    if saved and not refresh:
+        return saved
+    result = _run_key_mapping(m)
+    _keymaps.put(result)
+    return result
+
+
+@app.get("/api/key-mapping/saved")
+def key_mapping_saved(mapping: str = Query(...)):
+    """The saved key mapping check of one mapping without running anything (null when none)."""
+    _mapping_by_id(mapping)
+    return {"result": _keymaps.get(mapping)}
+
+
+@app.get("/api/key-mapping/rows")
+def key_mapping_rows(
+    mapping: str = Query(..., description="Mapping id"),
+    column: str = Query(..., description="The target's foreign key column, e.g. crew_type_id"),
+    filter: str = Query("problems", description="problems, all, or one bucket: correct, not_filled, wrong ..."),
+    page: int = Query(0, ge=0),
+    size: int = Query(50, ge=1, le=keymap.MAX_PAGE_SIZE),
+    reveal: bool = False,
+):
+    """The paired rows behind one link: source value, target id and the value that id points at."""
+    m = _mapping_by_id(mapping)
+    live = _live_tables()
+    try:
+        return keymap.rows(m, lambda member: _entry(live, member.ref), _keymaps.get(m.id), column,
+                           flt=filter, page=page, size=size, reveal=reveal)
+    except keymap.NotReady as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except datacheck.Skipped as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 # ---- Values behind a data check ---------------------------------------------------------
@@ -420,9 +495,11 @@ _ai = ai.Store(config.AI_SUMMARY_FILE)
 
 
 def _ai_facts(m):
-    """(fact sheet text, saved data check) for mapping `m`, from what the app already knows."""
+    """(fact sheet text, saved data check, saved key mapping check) for mapping `m`, from what
+    the app already knows."""
     live = _live_tables()
     check = _checks.get(m.id)
+    links = _keymaps.get(m.id)
 
     def name(member):
         e = _entry(live, member.ref)
@@ -454,13 +531,16 @@ def _ai_facts(m):
     if check and check.get("status") not in ("skipped", "error") and comparisons:
         hints = ai.rename_hints(m, lambda member: _entry(live, member.ref), comparisons[0])
 
-    facts = ai.build_facts(m, members, _row_check(m, live), check, comparisons, keys_by_target, hints)
-    return facts, check
+    facts = ai.build_facts(m, members, _row_check(m, live), check, comparisons, keys_by_target, hints, links=links)
+    return facts, check, links
 
 
 def _stale(saved):
+    """A summary is stale once the data check or the key mapping check ran again after it."""
     check = _checks.get(saved["mapping"])
-    return bool(check and check.get("checked_at") != saved.get("data_check_at"))
+    links = _keymaps.get(saved["mapping"])
+    return bool((check and check.get("checked_at") != saved.get("data_check_at"))
+                or (links and links.get("checked_at") != saved.get("key_mapping_at")))
 
 
 @app.get("/api/ai/status")
@@ -473,7 +553,7 @@ def ai_status():
 def ai_facts(mapping: str = Query(..., description="Mapping id, e.g. crew_type")):
     """Exactly what would be sent to the AI for this mapping. Calls no AI."""
     m = _mapping_by_id(mapping)
-    facts, check = _ai_facts(m)
+    facts, check, _links = _ai_facts(m)
     return {"mapping": m.id, "format": "toon", "approx_tokens": ai.approx_tokens(facts),
             "data_check_at": (check or {}).get("checked_at"), "facts": facts}
 
@@ -506,11 +586,16 @@ def ai_summary(req: SummaryRequest):
         return {**saved, "stale": False}
     if m.type not in ("transform", "excluded") and not _checks.get(m.id):
         _checks.put(_run_data_check(m))
-    facts, check = _ai_facts(m)
+    if m.type not in ("transform", "excluded") and not _keymaps.get(m.id):
+        try:
+            _keymaps.put(_run_key_mapping(m))
+        except Exception as exc:  # the summary can still be written from the data check
+            logger.error("key mapping check of %s failed: %s", m.id, exc)
+    facts, check, links = _ai_facts(m)
     try:
         answer, usage, bad, attempts = ai.summarize(facts)
     except ai.AiError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
-    result = ai.make_result(m.id, check, facts, answer, usage, bad, attempts)
+    result = ai.make_result(m.id, check, facts, answer, usage, bad, attempts, links=links)
     _ai.put(result)
     return {**result, "stale": False}
