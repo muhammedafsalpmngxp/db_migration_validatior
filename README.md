@@ -71,12 +71,41 @@ size, creation date. **Refresh** reads them again.
 The selected table is in the URL (`?table=A.dbo.crews`), so a view can be shared or
 bookmarked, and Back / Forward work.
 
+### Data check: are the values the same?
+
+Row counts can match while the data does not (`task_daily`: 110,939 = 110,939, yet 419
+crew types and every `time_stamp` were lost). **Run data check** on a table page, or **Run
+all data checks** on the overview, compares every value inside SQL Server - read-only,
+cross-database, nothing pulled into Python but counts and a few examples.
+
+1. **Rows are matched on a key** - the target's primary key paired with a source column,
+   or another id column - used only when it is unique on both sides and its values really
+   overlap (a renumbered id is rejected). With no usable key, rows are compared as
+   whole-row fingerprints (SHA-256 multiset, so duplicates count too).
+2. **Every paired column** is compared after converting the source value to the target
+   type. With a key, each matched row falls into exactly one bucket per column:
+   identical, case only, added, blank → NULL, **lost** (source value, target NULL),
+   recoded (source does not convert, target has a value) or **different**.
+3. **Recoded foreign keys are translated back**: the referenced table's column that best
+   matches the source text is found (`crew_type_id` → `ref.crew_type.crew_type_code`) and the
+   comparison repeated on the translated value. Recoding without a foreign key is checked
+   for consistency (`'Active'` → 1, `'Inactive'` → 0) and shown for review.
+4. **NULL and blank counts** of every column on both sides.
+
+Verdicts: **Values identical**, **Needs review** (values match, but a recoding rule, case
+change or value generated on load needs a person to confirm it) and **Data problems**
+(rows missing or extra, values lost or changed). Every finding is a sentence with the
+counts and examples. Results are kept in `backend/.cache/data_checks.json`. Mappings
+above `DATA_CHECK_MAX_ROWS` (5M rows), transforms and excluded tables are not checked.
+
 ### How columns are paired
 
 In order, each round over the columns still unpaired: declared in the mapping file
 (`columns:`), identical name, same name in another case, same name ignoring case /
 underscores / spaces, and finally **inferred** from the target's naming convention
-(`Supervisor` -> `supervisor_id`, `id` -> `company_id`, `Name` -> `emp_name`). Inferred pairs
+(`Supervisor` -> `supervisor_id`, `id` -> `company_id`, `Name` -> `emp_name`). A source `id`
+only ever becomes the target's own key, never another table's (`id` -> `pk_id`, not
+`crew_id`, on `bridge.crew_employee`). Inferred pairs
 are guesses and are labelled as such; anything the rules cannot see
 (`Description` -> `crew_type_name`) belongs in the mapping's `columns:`.
 
@@ -90,6 +119,10 @@ are guesses and are labelled as such; anything the rules cannot see
 | `GET /api/row-count?table=T.ref.crew` | exact `COUNT_BIG(*)` of one table in the plan |
 | `GET /api/keys?table=T.dbo.activity_codes_norms` | primary/unique keys, foreign keys it holds and ones pointing at it, with live row counts of the linked tables |
 | `GET /api/fk-check?table=...&fk=<name>` | exact counts for one foreign key: rows set, NULLs, distinct values used, orphans |
+| `GET /api/data-check?mapping=crew&refresh=true` | run the data check of one mapping (without `refresh`: the saved result, or a first run) |
+| `GET /api/data-check/saved?mapping=crew` | the saved result only, never runs |
+| `GET /api/data-checks` | every mapping's last verdict, and the background run's progress |
+| `POST /api/data-checks/run` | check every mapping in the background |
 
 Row counts come from `sys.partitions` (instant even for the 73 million row
 `ActivityTaskPlan`); the exact count is on demand because it reads the whole table.

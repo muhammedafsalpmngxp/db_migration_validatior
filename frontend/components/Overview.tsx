@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { fmt, fmtDelta, MAPPING_TYPE_LABEL, type CheckStatus, type Scope, type ScopeTable } from "@/lib/api";
+import { DATA_STATUS } from "./DataCheck";
+import { DataOverview, useDataResults } from "./DataOverview";
 import { Badge, Card, CHECK, SideTag, Stat } from "./ui";
 
 type Filter = "all" | CheckStatus;
@@ -34,6 +36,12 @@ export function Overview({ scope, onSelect }: { scope: Scope; onSelect: (ref: st
   const s = scope.summary;
   const count = (st: CheckStatus) => s.checks[st] ?? 0;
   const shown = filter === "all" ? rows : rows.filter((r) => r.check.status === filter);
+  const data = useDataResults();
+  const named = useMemo(() => rows.map((r) => ({
+    id: r.id,
+    ref: r.sources[0].ref,
+    label: r.sources.length > 1 ? `${r.sources[0].table} +${r.sources.length - 1}` : r.sources[0].table,
+  })), [rows]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -60,6 +68,8 @@ export function Overview({ scope, onSelect }: { scope: Scope; onSelect: (ref: st
         <Stat label="No rule / excluded" value={count("info") + count("excluded")} tone="info" hint="Transform mappings have no count rule" />
       </div>
 
+      <DataOverview mappings={named} data={data} onSelect={onSelect} />
+
       <Card
         flush
         title="Mappings"
@@ -82,7 +92,7 @@ export function Overview({ scope, onSelect }: { scope: Scope; onSelect: (ref: st
         }
       >
         <div className="overflow-x-auto">
-          <table className="num w-full min-w-[860px] text-sm">
+          <table className="num w-full min-w-[980px] text-sm">
             <thead className="text-left text-xs text-muted">
               <tr className="border-b border-border">
                 <th className="px-4 py-2 font-medium">Source</th>
@@ -90,12 +100,13 @@ export function Overview({ scope, onSelect }: { scope: Scope; onSelect: (ref: st
                 <th className="px-3 py-2 font-medium">Target</th>
                 <th className="px-3 py-2 text-right font-medium">Target rows</th>
                 <th className="px-3 py-2 text-right font-medium">Difference</th>
-                <th className="px-4 py-2 font-medium">Status</th>
+                <th className="px-3 py-2 font-medium">Row counts</th>
+                <th className="px-4 py-2 font-medium" title="Result of the last data check">Data</th>
               </tr>
             </thead>
             <tbody>
               {shown.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-muted">No mapping with this status.</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-muted">No mapping with this status.</td></tr>
               )}
               {shown.map((r) => {
                 const srcRows = r.type === "merge"
@@ -133,7 +144,14 @@ export function Overview({ scope, onSelect }: { scope: Scope; onSelect: (ref: st
                     <td className={`px-3 py-2.5 text-right ${r.check.status === "mismatch" ? "font-medium text-bad" : "text-muted"}`}>
                       {fmtDelta(r.check.delta, r.check.expected)}
                     </td>
-                    <td className="px-4 py-2.5"><Badge tone={CHECK[r.check.status].tone}>{CHECK[r.check.status].label}</Badge></td>
+                    <td className="px-3 py-2.5"><Badge tone={CHECK[r.check.status].tone}>{CHECK[r.check.status].label}</Badge></td>
+                    <td className="px-4 py-2.5">
+                      {data.results[r.id] ? (
+                        <Badge tone={DATA_STATUS[data.results[r.id].status]?.tone ?? "neutral"} title={data.results[r.id].headline}>
+                          {DATA_STATUS[data.results[r.id].status]?.icon} {DATA_STATUS[data.results[r.id].status]?.label}
+                        </Badge>
+                      ) : <span className="text-xs text-muted">—</span>}
+                    </td>
                   </tr>
                 );
               })}

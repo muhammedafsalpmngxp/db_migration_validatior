@@ -217,7 +217,8 @@ def compare_table(table: str = Query(..., description="Source table in the plan,
             })
             continue
         rows, summary = compare.align_columns(
-            source_cols, target_cols, target_table=e["table"], declared=m.columns
+            source_cols, target_cols, target_table=e["table"], declared=m.columns,
+            fk_columns=db.fk_columns(t.ref.side, e["object_id"]),
         )
         result["comparisons"].append({
             "target": name, "exists": True, "locked": False, "rows": rows, "summary": summary,
@@ -313,3 +314,56 @@ def foreign_key_check(
         return {"table": ref.ref, "fk": fk, **db.foreign_key_check(ref.side, found)}
     except db.TableLocked:
         raise locked
+
+
+# ---- Data check: value by value comparison ----------------------------------------------
+
+from . import datacheck  # noqa: E402
+
+_checks = datacheck.Store(config.DATA_CHECK_FILE)
+
+
+def _run_data_check(m):
+    live = _live_tables()
+    return datacheck.check(m, lambda member: _entry(live, member.ref))
+
+
+def _mapping_by_id(mapping_id):
+    m = next((x for x in get_plan().mappings if x.id == mapping_id), None)
+    if not m:
+        raise HTTPException(status_code=404, detail=f"No mapping {mapping_id!r} in the plan.")
+    return m
+
+
+@app.get("/api/data-check")
+def data_check(mapping: str = Query(..., description="Mapping id, e.g. crew_type"), refresh: bool = False):
+    """The data check of one mapping: the saved result, or a new run when asked (or none yet).
+    `run=false` style reads use /api/data-checks; this endpoint runs when there is no result."""
+    m = _mapping_by_id(mapping)
+    saved = _checks.get(m.id)
+    if saved and not refresh:
+        return saved
+    result = _run_data_check(m)
+    _checks.put(result)
+    return result
+
+
+@app.get("/api/data-check/saved")
+def data_check_saved(mapping: str = Query(...)):
+    """The saved result of one mapping without running anything (null when never checked)."""
+    _mapping_by_id(mapping)
+    return {"result": _checks.get(mapping)}
+
+
+@app.get("/api/data-checks")
+def data_checks():
+    """Status of every mapping's last data check, and of the background run."""
+    return {"results": _checks.summaries(), "job": dict(_checks.job)}
+
+
+@app.post("/api/data-checks/run")
+def data_checks_run():
+    """Check every mapping in the background, one after another."""
+    mappings = [m for m in get_plan().mappings]
+    started = _checks.run_all(mappings, _run_data_check)
+    return {"started": started, "job": dict(_checks.job)}

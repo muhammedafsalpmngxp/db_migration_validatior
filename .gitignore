@@ -20,6 +20,9 @@ htmlcov/
 venv/
 env/
 
+# Saved data check results
+backend/.cache/
+
 # ---- Frontend (Next.js) ------------------------------------------------------
 node_modules/
 .pnp

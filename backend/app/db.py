@@ -375,3 +375,22 @@ def foreign_key_check(side, fk):
         "orphan_rows": orphan_rows or 0,
         "seconds": round(time.time() - started, 2),
     }
+
+
+FK_COLUMNS_SQL = """
+SELECT c.name, fkc.referenced_object_id
+FROM sys.foreign_key_columns fkc
+JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
+WHERE fkc.parent_object_id = ? AND fkc.referenced_object_id <> fkc.parent_object_id
+"""
+
+
+def fk_columns(side, object_id):
+    """Lower-case names of the columns of a table that are foreign keys to another table.
+    Empty when the table is locked: the column pairing then simply goes without the hint."""
+    try:
+        return {r["name"].lower() for r in query(side, FK_COLUMNS_SQL, (object_id,))}
+    except pyodbc.Error as exc:
+        if is_lock_timeout(exc):
+            return set()
+        raise

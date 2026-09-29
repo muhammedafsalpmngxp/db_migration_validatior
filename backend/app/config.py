@@ -62,6 +62,14 @@ TARGET_SIDE = "T"
 
 MAPPING_FILE = Path(_env("MAPPING_FILE", BACKEND_DIR / "mappings" / "migration_plan.yaml"))
 
+# Data check (value by value comparison, see app/datacheck.py).
+# A mapping whose source and target rows add up to more than this is skipped.
+DATA_CHECK_MAX_ROWS = int(_env("DATA_CHECK_MAX_ROWS", "5000000"))
+# Seconds one data check query may run.
+DATA_CHECK_TIMEOUT = int(_env("DATA_CHECK_TIMEOUT", "900"))
+# The last result of each mapping, kept across restarts.
+DATA_CHECK_FILE = Path(_env("DATA_CHECK_FILE", BACKEND_DIR / ".cache" / "data_checks.json"))
+
 # How long a database's table list is reused before it is read again.
 TABLE_CACHE_SECONDS = int(_env("TABLE_CACHE_SECONDS", "60"))
 

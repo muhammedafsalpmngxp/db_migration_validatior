@@ -88,6 +88,7 @@ mappings:
       - {table: A.dbo.CrewType, role: driving}
       - {table: A.dbo.OLD_NEW_CREW_MAPPING, role: lookup}
     targets: [T.ref.crew_type]
+    columns: {Description: crew_type_name}
 
   - id: crew_type_employee
     type: one_to_one

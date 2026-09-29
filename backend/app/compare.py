@@ -14,24 +14,24 @@ def normalize(name):
 KEY_SUFFIXES = ("id", "guid", "uid", "code", "key")
 
 
-def _inferred_names(source_name, target_table):
-    """Target names the migration's naming convention would give `source_name`.
-
-    Two patterns seen in AlTasnimBI: a key suffix (CrewType -> crew_type_id), and the
-    table's name, or a leading part of it, as a prefix (id -> company_id on ref.company,
-    Name -> emp_name on ref.employee).
-    """
+def _suffixed_names(source_name):
+    """A column that became a key or code: CrewType -> crew_type_id, Account -> account_guid."""
     base = normalize(source_name)
-    if not base:
-        return []
-    names = [base + s for s in KEY_SUFFIXES]
+    return [base + s for s in KEY_SUFFIXES] if base else []
+
+
+def _prefixed_names(source_name, target_table):
+    """The table's name, or a leading part of it, as a prefix: id -> company_id on
+    ref.company, Name -> emp_name on ref.employee."""
+    base = normalize(source_name)
     table = normalize(target_table or "")
-    prefixes = {table[:n] for n in range(3, len(table) + 1)} if len(table) >= 3 else set()
-    names += [p + base for p in sorted(prefixes, key=len, reverse=True)]
-    return names
+    if not base or len(table) < 3:
+        return []
+    prefixes = sorted({table[:n] for n in range(3, len(table) + 1)}, key=len, reverse=True)
+    return [p + base for p in prefixes]
 
 
-def align_columns(source_cols, target_cols, target_table=None, declared=None):
+def align_columns(source_cols, target_cols, target_table=None, declared=None, fk_columns=None):
     """Pair source and target columns, then report what differs in each pair.
 
     Pairing runs in rounds, each only over columns still unpaired:
@@ -39,8 +39,13 @@ def align_columns(source_cols, target_cols, target_table=None, declared=None):
       exact       identical name
       case        same name, different case
       normalized  same once case, underscores and spaces are ignored
-      inferred    the target's naming convention (see `_inferred_names`) - a guess,
-                  labelled as one
+      inferred    the target's naming convention - a key suffix (CrewType ->
+                  crew_type_id) or the table name as a prefix (id -> company_id); a
+                  guess, labelled as one
+
+    `fk_columns` (lower-case target column names that are foreign keys to another table)
+    keeps the table-prefix guess off them: on bridge.crew_employee, source `id` is the
+    row's own id, not `crew_id`, which points at ref.crew.
 
     Returns (rows, summary). Each row carries `source` and/or `target`, the round that
     paired it (`match`), its differences, and one `status`:
@@ -65,21 +70,48 @@ def align_columns(source_cols, target_cols, target_table=None, declared=None):
         if hit in remaining:
             pair(col["name"], hit, "exact" if hit == col["name"] else "case")
 
+    fks = {c.lower() for c in (fk_columns or ())}
+
+    by_name = {c["name"]: c for c in target_cols}
+
     def round_by(keys_for, how):
+        """keys_for(name) -> [(normalized target name, allowed(target column))]."""
         by_norm = {}
         for name in remaining:
             by_norm.setdefault(normalize(name), []).append(name)
         for col in source_cols:
             if col["name"] in pairs:
                 continue
-            for key in keys_for(col["name"]):
-                hit = next((n for n in by_norm.get(key, []) if n in remaining), None)
+            for key, allowed in keys_for(col["name"]):
+                hit = next((n for n in by_norm.get(key, []) if n in remaining and allowed(by_name[n])), None)
                 if hit:
                     pair(col["name"], hit, how)
                     break
 
-    round_by(lambda n: [normalize(n)], "normalized")
-    round_by(lambda n: _inferred_names(n, target_table), "inferred")
+    def anything(_col):
+        return True
+
+    target_has_key = any(c["pk"] or c["identity"] for c in target_cols)
+
+    def prefix_ok_for(source_name):
+        # A source `id` is the row's own id: it may become the target's own key
+        # (id -> company_id on ref.company), never another table's key column
+        # (id -> crew_id on bridge.crew_employee, whose own key is pk_id). A target that
+        # declares no key (project.project_mstr) gets the <table>_id guess instead.
+        if normalize(source_name) == "id" and target_has_key:
+            return lambda col: col["pk"] or col["identity"]
+        return lambda col: col["name"].lower() not in fks
+
+    def inferred(name):
+        ok = prefix_ok_for(name)
+        prefixed = _prefixed_names(name, target_table)
+        if normalize(name) == "id":
+            prefixed.append("pkid")
+        return [(k, anything) for k in _suffixed_names(name)] + [(k, ok) for k in prefixed]
+
+    round_by(lambda n: [(normalize(n), anything)], "normalized")
+    # One source column at a time, suffix guesses before prefix guesses.
+    round_by(inferred, "inferred")
 
     rows = []
     for col in source_cols:

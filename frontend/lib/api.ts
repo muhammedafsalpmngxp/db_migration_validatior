@@ -205,3 +205,98 @@ export const keysApi = {
   check: (ref: string, fk: string) =>
     get<ForeignKeyCheck>(`/api/fk-check?table=${encodeURIComponent(ref)}&fk=${encodeURIComponent(fk)}`),
 };
+
+// ---- Data check (backend/app/datacheck.py) ---------------------------------------
+
+export type DataStatus = "identical" | "problems" | "review" | "skipped" | "error";
+export type Severity = "error" | "review" | "info";
+export type Bucket = "identical" | "case_only" | "added" | "blank_to_null" | "lost" | "recoded" | "different";
+
+export type DataExample = { key: string; source: string | null; target: string | null };
+export type ValueExample = { value: string | null; rows: number };
+
+export type DataColumn = {
+  label: string;
+  source: string;
+  target: string;
+  stype: string;
+  ttype: string;
+  match: string;
+  mode: "direct" | "converted" | "lookup";
+  lookup: { schema: string; table: string; column: string; key: string; coverage: number } | null;
+  is_key: boolean;
+  verdict: "identical" | "problem" | "review";
+  cannot_convert: number;
+  nulls: { source: number; source_blanks: number; target: number; target_blanks: number; added: number };
+  /** keyed comparison: every matched row falls into one bucket */
+  buckets?: Record<Bucket, number>;
+  examples?: Partial<Record<"different" | "lost" | "added" | "case_only", DataExample[]>>;
+  recoding?: { pairs: { source: string; target: string; rows: number }[]; distinct_source_values: number; inconsistent: number };
+  /** keyless comparison: values compared as multisets */
+  multiset?: { only_in_source: number; only_in_target: number; examples: { source?: ValueExample[]; target?: ValueExample[] } };
+  recoded?: boolean;
+};
+
+export type DataCheck = {
+  mapping: string;
+  type: MappingType;
+  status: DataStatus;
+  headline: string;
+  checked_at: string;
+  seconds: number;
+  method?: "key" | "fingerprint" | null;
+  key?: { source: string; target: string } | null;
+  key_notes?: string[];
+  source?: string;
+  target?: string;
+  rows?: {
+    source: number;
+    target: number;
+    matched?: number;
+    missing_in_target?: number;
+    extra_in_target?: number;
+    source_null_keys?: number;
+    target_null_keys?: number;
+    identical_rows?: number;
+    problem_rows?: number;
+    only_in_source?: number;
+    only_in_target?: number;
+    identical_rows_ignoring_recoded?: number;
+  };
+  missing_by_source?: { table: string; rows: number }[];
+  missing_examples?: { table: string; key: string }[];
+  extra_examples?: string[];
+  columns?: DataColumn[];
+  findings: { severity: Severity; text: string; column?: string }[];
+  profile?: {
+    source_rows: number;
+    target_rows: number;
+    source: { column: string; type: string; nulls: number; blanks: number }[];
+    target: { column: string; type: string; nulls: number; blanks: number }[];
+  };
+};
+
+export type DataCheckSummary = Pick<DataCheck, "mapping" | "status" | "headline" | "checked_at" | "seconds" | "method"> & {
+  errors: number;
+  reviews: number;
+};
+
+export type DataCheckJob = {
+  running: boolean;
+  done: number;
+  total: number;
+  current: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export const dataApi = {
+  saved: (mapping: string) => get<{ result: DataCheck | null }>(`/api/data-check/saved?mapping=${encodeURIComponent(mapping)}`),
+  run: (mapping: string) => get<DataCheck>(`/api/data-check?mapping=${encodeURIComponent(mapping)}&refresh=true`),
+  all: () => get<{ results: Record<string, DataCheckSummary>; job: DataCheckJob }>("/api/data-checks"),
+  runAll: async () => {
+    const res = await fetch("/api/data-checks/run", { method: "POST" });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.json() as Promise<{ started: boolean; job: DataCheckJob }>;
+  },
+};

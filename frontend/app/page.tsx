@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, fmt, fmtSize, type CompareResult, type Health, type Scope } from "@/lib/api";
 import { ColumnComparison, ColumnList } from "@/components/ColumnComparison";
+import { DataCheck } from "@/components/DataCheck";
 import { KeysView } from "@/components/KeysView";
 import { MappingView } from "@/components/MappingView";
 import { Overview } from "@/components/Overview";
@@ -165,6 +166,8 @@ export default function Home() {
                 )}
 
                 <MappingView key={`${sel.ref}|${scope?.read_at}`} result={result} onSelect={navigate} />
+
+                <DataCheck key={`data|${result.mapping.id}`} mappingId={result.mapping.id} mappingType={result.mapping.type} />
 
                 <KeysView key={`keys|${result.mapping.id}|${scope?.read_at}`} targets={result.mapping.targets} />
 
