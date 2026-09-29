@@ -5,6 +5,9 @@ import type { NextConfig } from "next";
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
 
 const nextConfig: NextConfig = {
+  // `next dev` trusts only localhost by default; allow colleagues on the same LAN to open
+  // it at http://192.168.x.x:3000. Has no effect on `next build` / `next start`.
+  allowedDevOrigins: ["192.168.*.*"],
   experimental: {
     // An exact COUNT(*) on the 73M row source table outlives the 30s default.
     proxyTimeout: 330_000,
