@@ -365,3 +365,50 @@ export function valuesUrl(p: ValuesQuery, format: "json" | "csv" = "json") {
 export const valuesApi = {
   get: <T extends ValueRows | ValueCounts>(p: ValuesQuery) => get<T>(valuesUrl(p)),
 };
+
+// ---- AI summary (backend/app/ai.py) ------------------------------------------------
+
+export type AiStatus = { enabled: boolean; provider: string; model: string; reason: string | null };
+
+export type AiSummary = {
+  mapping: string;
+  status: "ok" | "review" | "problem" | "not_checked";
+  verdict: string;
+  summary: string;
+  worth_checking: string[];
+  numbers_verified: boolean;
+  unverified_numbers: string[];
+  attempts: number;
+  model: string;
+  tokens: { input: number | null; output: number | null };
+  generated_at: string;
+  data_check_at: string | null;
+  facts: string;
+  stale: boolean;
+};
+
+export type AiFacts = { mapping: string; format: string; approx_tokens: number; data_check_at: string | null; facts: string };
+
+export const aiApi = {
+  status: () => get<AiStatus>("/api/ai/status"),
+  saved: (mapping: string) => get<{ result: AiSummary | null }>(`/api/ai/summary/saved?mapping=${encodeURIComponent(mapping)}`),
+  facts: (mapping: string) => get<AiFacts>(`/api/ai/facts?mapping=${encodeURIComponent(mapping)}`),
+  generate: async (mapping: string, refresh: boolean) => {
+    const res = await fetch("/api/ai/summary", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mapping, refresh }),
+    });
+    if (!res.ok) {
+      let detail = `${res.status} ${res.statusText}`;
+      try {
+        const body = await res.json();
+        if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      } catch {
+        // not JSON: keep the status line
+      }
+      throw new Error(detail);
+    }
+    return res.json() as Promise<AiSummary>;
+  },
+};

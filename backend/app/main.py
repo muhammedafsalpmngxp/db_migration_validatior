@@ -408,3 +408,109 @@ def data_check_values(
         return Response(values_mod.as_csv(result), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="{name}"'})
     return result
+
+
+# ---- AI summary -------------------------------------------------------------------------
+
+from pydantic import BaseModel  # noqa: E402
+
+from . import ai  # noqa: E402
+
+_ai = ai.Store(config.AI_SUMMARY_FILE)
+
+
+def _ai_facts(m):
+    """(fact sheet text, saved data check) for mapping `m`, from what the app already knows."""
+    live = _live_tables()
+    check = _checks.get(m.id)
+
+    def name(member):
+        e = _entry(live, member.ref)
+        return f"{e['schema']}.{e['table']}" if e else f"{member.ref.schema}.{member.ref.table}"
+
+    members = [{"kind": "old", "name": name(s) + (f" ({s.role})" if s.role else ""),
+                "rows": (_entry(live, s.ref) or {}).get("rows")} for s in m.sources]
+    members += [{"kind": "new", "name": name(t), "rows": (_entry(live, t.ref) or {}).get("rows")} for t in m.targets]
+
+    primary = next((s for s in m.sources if s.role == "driving"), m.sources[0])
+    comparisons = []
+    try:
+        comparisons = compare_table(table=primary.ref.ref).get("comparisons") or []
+    except HTTPException:
+        comparisons = []
+
+    keys_by_target = []
+    for t in m.targets:
+        e = _entry(live, t.ref)
+        if not e:
+            continue
+        try:
+            keys = None if e["locked"] else db.table_keys(t.ref.side, e["object_id"])
+        except db.TableLocked:
+            keys = None
+        keys_by_target.append((f"{e['schema']}.{e['table']}", keys))
+
+    hints = []
+    if check and check.get("status") not in ("skipped", "error") and comparisons:
+        hints = ai.rename_hints(m, lambda member: _entry(live, member.ref), comparisons[0])
+
+    facts = ai.build_facts(m, members, _row_check(m, live), check, comparisons, keys_by_target, hints)
+    return facts, check
+
+
+def _stale(saved):
+    check = _checks.get(saved["mapping"])
+    return bool(check and check.get("checked_at") != saved.get("data_check_at"))
+
+
+@app.get("/api/ai/status")
+def ai_status():
+    """Whether AI summaries are set up (key and model in backend/.env)."""
+    return ai.status()
+
+
+@app.get("/api/ai/facts")
+def ai_facts(mapping: str = Query(..., description="Mapping id, e.g. crew_type")):
+    """Exactly what would be sent to the AI for this mapping. Calls no AI."""
+    m = _mapping_by_id(mapping)
+    facts, check = _ai_facts(m)
+    return {"mapping": m.id, "format": "toon", "approx_tokens": ai.approx_tokens(facts),
+            "data_check_at": (check or {}).get("checked_at"), "facts": facts}
+
+
+@app.get("/api/ai/summary/saved")
+def ai_summary_saved(mapping: str = Query(...)):
+    """The saved summary of a mapping (null when none yet). Calls no AI."""
+    m = _mapping_by_id(mapping)
+    saved = _ai.get(m.id)
+    return {"result": {**saved, "stale": _stale(saved)} if saved else None}
+
+
+class SummaryRequest(BaseModel):
+    mapping: str
+    refresh: bool = False
+
+
+@app.post("/api/ai/summary")
+def ai_summary(req: SummaryRequest):
+    """Write (or return the saved) plain-words summary of one mapping.
+
+    Runs the data check first when the mapping has none yet, so the summary always rests
+    on measured values."""
+    m = _mapping_by_id(req.mapping)
+    state = ai.status()
+    if not state["enabled"]:
+        raise HTTPException(status_code=409, detail=state["reason"])
+    saved = _ai.get(m.id)
+    if saved and not req.refresh and not _stale(saved):
+        return {**saved, "stale": False}
+    if m.type not in ("transform", "excluded") and not _checks.get(m.id):
+        _checks.put(_run_data_check(m))
+    facts, check = _ai_facts(m)
+    try:
+        answer, usage, bad, attempts = ai.summarize(facts)
+    except ai.AiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    result = ai.make_result(m.id, check, facts, answer, usage, bad, attempts)
+    _ai.put(result)
+    return {**result, "stale": False}

@@ -70,6 +70,16 @@ DATA_CHECK_TIMEOUT = int(_env("DATA_CHECK_TIMEOUT", "900"))
 # The last result of each mapping, kept across restarts.
 DATA_CHECK_FILE = Path(_env("DATA_CHECK_FILE", BACKEND_DIR / ".cache" / "data_checks.json"))
 
+# AI summary (app/ai.py). Only OpenAI is wired up; an empty key turns the feature off.
+LLM_PROVIDER = _env("LLM_PROVIDER", "openai").lower()
+OPENAI_API_KEY = _env("OPENAI_API_KEY", "")
+OPENAI_MODEL = _env("OPENAI_MODEL", "")
+OPENAI_BASE_URL = _env("OPENAI_BASE_URL", None)
+# Seconds to wait for one AI answer, and the most tokens it may use (reasoning included).
+AI_TIMEOUT = int(_env("AI_TIMEOUT", "120"))
+AI_MAX_OUTPUT_TOKENS = int(_env("AI_MAX_OUTPUT_TOKENS", "4000"))
+AI_SUMMARY_FILE = Path(_env("AI_SUMMARY_FILE", BACKEND_DIR / ".cache" / "ai_summaries.json"))
+
 # How long a database's table list is reused before it is read again.
 TABLE_CACHE_SECONDS = int(_env("TABLE_CACHE_SECONDS", "60"))
 

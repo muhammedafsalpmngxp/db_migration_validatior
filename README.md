@@ -17,6 +17,10 @@ backend/                      FastAPI + pyodbc, read-only against SQL Server
   app/db.py                   table lists, row counts, column definitions (catalog views only)
   app/mapping.py              loads and validates the migration plan
   app/compare.py              column alignment and row count rules
+  app/datacheck.py            value by value comparison (the Data check)
+  app/values.py               the values panel behind a column
+  app/ai.py                   AI summary: fact sheet, OpenAI call, number check
+  app/ai_prompt.py            the AI's instructions and answer shape
   app/main.py                 HTTP API
   mappings/migration_plan.yaml  the migration scope and which source becomes which target
 frontend/                     Next.js 16 + Tailwind; proxies /api/* to the backend
@@ -111,6 +115,31 @@ real values live from both databases:
 Columns that look like contact details (email, phone, GSM, fax) are hidden until **Show
 values** is pressed. The app has no login, so anyone who can open it can press it.
 
+### AI summary: the result in plain words
+
+The **AI summary** card at the top of each table page writes one short paragraph, plus up
+to 4 things worth checking, from the facts this app measured. The AI only explains; it
+decides nothing:
+
+1. `app/ai.py` builds a **fact sheet** from the saved data check, row counts, column
+   comparison and keys - TOON style (field names once, then one line per item), with only
+   the columns that have an issue in full ("39 more compared columns, all identical").
+   It also measures **rename hints**: a leftover old column and a leftover new column with
+   the same values and row counts (`Type` -> `project_type`: 4 of 4).
+2. The fact sheet and the fixed instructions in `app/ai_prompt.py` go to OpenAI
+   (`OPENAI_MODEL`), which must answer in a fixed JSON shape: verdict, summary,
+   worth_checking.
+3. Every number in the answer is checked against the fact sheet. An answer with a number
+   that is not there is sent back once to be rewritten, and flagged on the card if it still
+   is. The status badge comes from the data check, never from the AI.
+4. The summary is saved in `backend/.cache/ai_summaries.json` and marked out of date when
+   the data check is run again.
+
+Never sent: connection details, whole tables or rows, and values of email / phone columns.
+**See what is sent to the AI** on the card shows the exact text, and works before a key
+is set. Settings in `backend/.env`: `LLM_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_MODEL`
+(optional `OPENAI_BASE_URL`, `AI_TIMEOUT`, `AI_MAX_OUTPUT_TOKENS`).
+
 ### How columns are paired
 
 In order, each round over the columns still unpaired: declared in the mapping file
@@ -137,6 +166,10 @@ are guesses and are labelled as such; anything the rules cannot see
 | `GET /api/data-checks` | every mapping's last verdict, and the background run's progress |
 | `POST /api/data-checks/run` | check every mapping in the background |
 | `GET /api/data-check/values?mapping=crew&column=Code&view=rows` | the real values of one column: `view=rows` (side by side) or `counts`; `filter`, `q`, `page`, `size`, `reveal`, `format=csv` |
+| `GET /api/ai/status` | whether AI summaries are set up (key and model) |
+| `GET /api/ai/facts?mapping=crew` | the exact fact sheet that is (or would be) sent to the AI; calls no AI |
+| `GET /api/ai/summary/saved?mapping=crew` | the saved summary, or null; calls no AI |
+| `POST /api/ai/summary` `{"mapping": "crew", "refresh": false}` | write the summary (runs the data check first if there is none) |
 
 Row counts come from `sys.partitions` (instant even for the 73 million row
 `ActivityTaskPlan`); the exact count is on demand because it reads the whole table.

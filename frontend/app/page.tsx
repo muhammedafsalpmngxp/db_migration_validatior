@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, fmt, fmtSize, type CompareResult, type Health, type Scope } from "@/lib/api";
+import { AiSummary } from "@/components/AiSummary";
 import { ColumnComparison, ColumnList } from "@/components/ColumnComparison";
 import { DataCheck } from "@/components/DataCheck";
 import { KeysView } from "@/components/KeysView";
@@ -164,6 +165,8 @@ export default function Home() {
                     and columns cannot be read right now. Press Refresh in a moment.
                   </p>
                 )}
+
+                <AiSummary key={`ai|${result.mapping.id}`} mappingId={result.mapping.id} />
 
                 <MappingView key={`${sel.ref}|${scope?.read_at}`} result={result} onSelect={navigate} />
 
