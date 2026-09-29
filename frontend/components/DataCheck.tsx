@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { dataApi, fmt, type DataCheck as Result, type DataColumn, type DataStatus, type Severity } from "@/lib/api";
 import { Badge, Card, ErrorBox, Spinner, Stat, type Tone } from "./ui";
+import { ValuesPanel } from "./ValuesPanel";
 
 export const DATA_STATUS: Record<DataStatus, { label: string; tone: Tone; icon: string }> = {
   identical: { label: "Values identical", tone: "ok", icon: "✓" },
@@ -116,6 +117,15 @@ function Examples({ c }: { c: DataColumn }) {
   );
 }
 
+function ColumnName({ c, onOpen }: { c: DataColumn; onOpen: (c: DataColumn) => void }) {
+  return (
+    <button type="button" onClick={() => onOpen(c)} title="See the values of this column in source and target"
+      className="font-mono text-[13px] text-left text-accent underline decoration-dotted underline-offset-4 hover:decoration-solid">
+      {c.label}
+    </button>
+  );
+}
+
 function Nulls({ c }: { c: DataColumn }) {
   const s = c.nulls.source + c.nulls.source_blanks;
   const t = c.nulls.target;
@@ -126,7 +136,7 @@ function Nulls({ c }: { c: DataColumn }) {
   );
 }
 
-function KeyedColumns({ columns, matched }: { columns: DataColumn[]; matched: number }) {
+function KeyedColumns({ columns, matched, onOpen }: { columns: DataColumn[]; matched: number; onOpen: (c: DataColumn) => void }) {
   return (
     <table className="num w-full min-w-[900px] text-sm">
       <thead className="bg-surface-2 text-left text-xs text-muted">
@@ -152,7 +162,7 @@ function KeyedColumns({ columns, matched }: { columns: DataColumn[]; matched: nu
           return (
             <tr key={c.label} className="border-t border-border align-top">
               <td className="px-3 py-2">
-                <span className="font-mono text-[13px]">{c.label}</span>
+                <ColumnName c={c} onOpen={onOpen} />
                 <span className="ml-1.5 text-[11px] text-muted">{c.stype}{c.stype !== c.ttype ? ` → ${c.ttype}` : ""}</span>
                 {c.is_key && <Badge tone="accent">key</Badge>}
                 {c.lookup && (
@@ -176,7 +186,7 @@ function KeyedColumns({ columns, matched }: { columns: DataColumn[]; matched: nu
   );
 }
 
-function KeylessColumns({ columns }: { columns: DataColumn[] }) {
+function KeylessColumns({ columns, onOpen }: { columns: DataColumn[]; onOpen: (c: DataColumn) => void }) {
   return (
     <table className="num w-full min-w-[820px] text-sm">
       <thead className="bg-surface-2 text-left text-xs text-muted">
@@ -195,7 +205,7 @@ function KeylessColumns({ columns }: { columns: DataColumn[] }) {
           return (
             <tr key={c.label} className="border-t border-border align-top">
               <td className="px-3 py-2">
-                <span className="font-mono text-[13px]">{c.label}</span>
+                <ColumnName c={c} onOpen={onOpen} />
                 <span className="ml-1.5 text-[11px] text-muted">{c.stype}{c.stype !== c.ttype ? ` → ${c.ttype}` : ""}</span>
                 {c.lookup && <div className="text-[11px] text-info">via {c.lookup.schema}.{c.lookup.table}.{c.lookup.column}</div>}
                 <Examples c={c} />
@@ -263,6 +273,7 @@ function NullProfile({ profile }: { profile: NonNullable<Result["profile"]> }) {
 
 function Body({ r }: { r: Result }) {
   const [onlyIssues, setOnlyIssues] = useState(false);
+  const [open, setOpen] = useState<DataColumn | null>(null);
   const st = DATA_STATUS[r.status] ?? DATA_STATUS.error;
   const rows = r.rows;
   const cols = (r.columns ?? []).filter((c) => !onlyIssues || c.verdict !== "identical");
@@ -325,7 +336,10 @@ function Body({ r }: { r: Result }) {
       {(r.columns?.length ?? 0) > 0 && (
         <div>
           <div className="mb-2 flex items-center justify-between gap-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">Columns ({r.columns!.length} compared)</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
+              Columns ({r.columns!.length} compared)
+              <span className="ml-2 font-normal normal-case tracking-normal">· click a column name to see its values</span>
+            </h3>
             <label className="flex items-center gap-1.5 text-xs text-muted">
               <input type="checkbox" checked={onlyIssues} onChange={(e) => setOnlyIssues(e.target.checked)} />
               Only columns with problems or review ({issues})
@@ -333,13 +347,25 @@ function Body({ r }: { r: Result }) {
           </div>
           <div className="overflow-x-auto rounded-lg border border-border">
             {r.method === "key"
-              ? <KeyedColumns columns={cols} matched={rows?.matched ?? 0} />
-              : <KeylessColumns columns={cols} />}
+              ? <KeyedColumns columns={cols} matched={rows?.matched ?? 0} onOpen={setOpen} />
+              : <KeylessColumns columns={cols} onOpen={setOpen} />}
           </div>
         </div>
       )}
 
       {r.profile && <NullProfile profile={r.profile} />}
+
+      {open && (
+        <ValuesPanel
+          key={open.source}
+          mapping={r.mapping}
+          column={open.source}
+          label={open.label}
+          keyed={r.method === "key"}
+          checkedAt={r.checked_at}
+          onClose={() => setOpen(null)}
+        />
+      )}
     </div>
   );
 }

@@ -300,3 +300,68 @@ export const dataApi = {
     return res.json() as Promise<{ started: boolean; job: DataCheckJob }>;
   },
 };
+
+// ---- Values behind a data check (backend/app/values.py) ----------------------------
+
+export type ValuesColumn = {
+  source: string;
+  target: string;
+  stype: string;
+  ttype: string;
+  lookup: { schema: string; table: string; column: string } | null;
+};
+
+export type RowStatus = Bucket | "missing" | "extra";
+
+export type ValueRows = {
+  view: "rows";
+  column: ValuesColumn;
+  key: { source: string; target: string };
+  union: boolean;
+  hidden: boolean;
+  sensitive: boolean;
+  filter: string;
+  total: number;
+  page: number;
+  size: number;
+  counts: Record<"all_rows" | "differences" | "lost" | "different" | "recoded" | "missing" | "extra", number>;
+  rows: { key: string | null; table: string | null; source: string | null; target: string | null;
+          target_raw: string | null; truncated: boolean; status: RowStatus }[];
+};
+
+export type ValueCounts = {
+  view: "counts";
+  column: ValuesColumn;
+  hidden: boolean;
+  sensitive: boolean;
+  filter: string;
+  total: number;
+  page: number;
+  size: number;
+  totals: { distinct_values: number; differing_values: number; source_rows: number; target_rows: number };
+  values: { value: string | null; target_raw: string | null; is_null: boolean; truncated: boolean;
+            source_rows: number; target_rows: number }[];
+};
+
+export type ValuesQuery = {
+  mapping: string;
+  column: string;
+  view: "rows" | "counts";
+  filter?: string;
+  q?: string;
+  page?: number;
+  size?: number;
+  reveal?: boolean;
+};
+
+export function valuesUrl(p: ValuesQuery, format: "json" | "csv" = "json") {
+  const u = new URLSearchParams({
+    mapping: p.mapping, column: p.column, view: p.view, filter: p.filter ?? "all", q: p.q ?? "",
+    page: String(p.page ?? 0), size: String(p.size ?? 50), reveal: String(!!p.reveal), format,
+  });
+  return `/api/data-check/values?${u.toString()}`;
+}
+
+export const valuesApi = {
+  get: <T extends ValueRows | ValueCounts>(p: ValuesQuery) => get<T>(valuesUrl(p)),
+};

@@ -98,6 +98,19 @@ change or value generated on load needs a person to confirm it) and **Data probl
 counts and examples. Results are kept in `backend/.cache/data_checks.json`. Mappings
 above `DATA_CHECK_MAX_ROWS` (5M rows), transforms and excluded tables are not checked.
 
+**See the values**: click any column name in the Data check table. A side panel reads the
+real values live from both databases:
+
+- **Side by side** (tables matched on a key): each source row next to its own target row,
+  with the same verdict per cell (same, lost, different, recoded, missing, extra). Filter
+  to only the differences, search a key or value, page through every row, 50 at a time.
+- **Value counts** (every table): each distinct value with how many rows hold it in the
+  source and in the target - the view for tables whose rows cannot be paired.
+- **Download CSV** of the current view (up to 100,000 rows).
+
+Columns that look like contact details (email, phone, GSM, fax) are hidden until **Show
+values** is pressed. The app has no login, so anyone who can open it can press it.
+
 ### How columns are paired
 
 In order, each round over the columns still unpaired: declared in the mapping file
@@ -123,6 +136,7 @@ are guesses and are labelled as such; anything the rules cannot see
 | `GET /api/data-check/saved?mapping=crew` | the saved result only, never runs |
 | `GET /api/data-checks` | every mapping's last verdict, and the background run's progress |
 | `POST /api/data-checks/run` | check every mapping in the background |
+| `GET /api/data-check/values?mapping=crew&column=Code&view=rows` | the real values of one column: `view=rows` (side by side) or `counts`; `filter`, `q`, `page`, `size`, `reveal`, `format=csv` |
 
 Row counts come from `sys.partitions` (instant even for the 73 million row
 `ActivityTaskPlan`); the exact count is on demand because it reads the whole table.

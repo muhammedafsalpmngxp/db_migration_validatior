@@ -367,3 +367,44 @@ def data_checks_run():
     mappings = [m for m in get_plan().mappings]
     started = _checks.run_all(mappings, _run_data_check)
     return {"started": started, "job": dict(_checks.job)}
+
+
+# ---- Values behind a data check ---------------------------------------------------------
+
+from fastapi.responses import Response  # noqa: E402
+
+from . import values as values_mod  # noqa: E402
+
+
+@app.get("/api/data-check/values")
+def data_check_values(
+    mapping: str = Query(..., description="Mapping id, e.g. crew_type"),
+    column: str = Query(..., description="Source (or target) column name"),
+    view: str = Query("rows", pattern="^(rows|counts)$"),
+    filter: str = Query("all"),
+    q: str = Query("", max_length=200),
+    page: int = Query(0, ge=0),
+    size: int = Query(50, ge=1, le=values_mod.MAX_PAGE_SIZE),
+    reveal: bool = False,
+    format: str = Query("json", pattern="^(json|csv)$"),
+):
+    """The real values of one column: rows side by side (tables matched on a key) or value
+    counts (every table). `format=csv` returns up to 100,000 rows of the same view."""
+    m = _mapping_by_id(mapping)
+    live = _live_tables()
+    fn = values_mod.rows if view == "rows" else values_mod.counts
+    try:
+        result = fn(m, lambda member: _entry(live, member.ref), _checks.get(m.id), column,
+                    flt=filter, q=q, page=page, size=size, reveal=reveal,
+                    limit=values_mod.CSV_MAX_ROWS if format == "csv" else None)
+    except values_mod.NotReady as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except datacheck.Skipped as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if format == "csv":
+        name = f"{m.id}_{column}_{view}.csv".replace(" ", "_")
+        return Response(values_mod.as_csv(result), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+    return result

@@ -70,14 +70,15 @@ def _bt(type_name):
     return type_name.split("(")[0].lower()
 
 
-def _run(sql):
-    """Rows of one read-only query, from the target connection."""
+def _run(sql, params=()):
+    """Rows of one read-only query, from the target connection. User input only ever
+    arrives through `params`, never inside `sql`."""
     with closing(db.connect(config.TARGET_SIDE)) as con:
         con.timeout = config.DATA_CHECK_TIMEOUT
         cur = con.cursor()
         cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
         try:
-            cur.execute(sql)
+            cur.execute(sql, params) if params else cur.execute(sql)
         except pyodbc.Error as exc:
             if db.is_lock_timeout(exc):
                 raise Skipped("A table is locked by another session (a load in progress?).") from exc
@@ -188,7 +189,7 @@ class Side:
             branches.append(f"SELECT {', '.join(parts)} FROM {_full(member.ref.side, entry['schema'], entry['table'])} x")
         return "(" + " UNION ALL ".join(branches) + ")"
 
-    def target_sql(self, key_pair=None):
+    def target_sql(self, key_pair=None, raw=False):
         member, entry, _ = self.target
         parts, joins = ["1 AS __t"], []
         if key_pair:
@@ -203,6 +204,8 @@ class Side:
             # u<i>: what the UI shows as the target value - the translated text for a lookup.
             parts.append(f"{p.target_value('y', ja)} AS u{p.i}" if p.lookup
                          else f"{_raw_text('y.' + _q(p.target['name']), p.ttype)} AS u{p.i}")
+            if raw:
+                parts.append(f"{_raw_text('y.' + _q(p.target['name']), p.ttype)} AS v{p.i}")
         return (f"(SELECT {', '.join(parts)} FROM "
                 f"{_full(config.TARGET_SIDE, entry['schema'], entry['table'])} y {' '.join(joins)})")
 
@@ -580,7 +583,16 @@ def check(m, entry_of):
     return result
 
 
-def _check(m, entry_of):
+class Prepared:
+    """The tables of a mapping, their columns and pairs, and the SQL for both sides."""
+
+
+def prepare(m, entry_of):
+    """Everything a comparison of mapping `m` needs; raises Skipped when it cannot run.
+
+    Shared by the data check and the values view, so both pair and convert columns the
+    same way.
+    """
     if m.type == "excluded":
         raise Skipped("Excluded from the migration: nothing to compare.")
     if m.type == "transform":
@@ -613,11 +625,24 @@ def _check(m, entry_of):
     comparable = [r for r in rows if r["source"] and r["target"]
                   and _bt(r["source"]["type"]) not in NOCOMPARE and _bt(r["target"]["type"]) not in NOCOMPARE]
     pairs = [Pair(i, r) for i, r in enumerate(comparable)]
-    not_compared = [f"{r['source']['name']} ({r['source']['type']})" for r in rows
-                    if r["source"] and r["target"] and r not in comparable]
 
-    side = Side([(s, e, {c["name"].lower(): c for c in cols}) for s, e, cols in zip(srcs, sentries, source_cols)],
-                (tmember, tentry, tcols), pairs)
+    p = Prepared()
+    p.srcs, p.sentries, p.tmember, p.tentry = srcs, sentries, tmember, tentry
+    p.tcols, p.source_cols, p.keys, p.outgoing, p.fk_cols, p.pk = tcols, source_cols, keys, outgoing, fk_cols, pk
+    p.rows, p.comparable, p.pairs = rows, comparable, pairs
+    p.not_compared = [f"{r['source']['name']} ({r['source']['type']})" for r in rows
+                      if r["source"] and r["target"] and r not in comparable]
+    p.side = Side([(s, e, {c["name"].lower(): c for c in cols}) for s, e, cols in zip(srcs, sentries, source_cols)],
+                  (tmember, tentry, tcols), pairs)
+    return p
+
+
+def _check(m, entry_of):
+    prep = prepare(m, entry_of)
+    srcs, sentries, tmember, tentry = prep.srcs, prep.sentries, prep.tmember, prep.tentry
+    tcols, source_cols, keys, outgoing = prep.tcols, prep.source_cols, prep.keys, prep.outgoing
+    fk_cols, pk, rows, comparable, pairs = prep.fk_cols, prep.pk, prep.rows, prep.comparable, prep.pairs
+    not_compared, side = prep.not_compared, prep.side
 
     # NULL profiles of every column, source tables summed.
     target_rows, tnulls = _null_profile(config.TARGET_SIDE, tentry, tcols)
