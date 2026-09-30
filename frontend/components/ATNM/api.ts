@@ -3,7 +3,10 @@
 export type Level = "ok" | "review" | "problem" | "none";
 export type TableStatus = "verified" | "unverified" | "review" | "problem";
 export type Scope = "required" | "all";
-export type DataStatus = "identical" | "different" | "error" | "locked" | "skipped";
+export type DataStatus = "identical" | "different" | "error" | "locked" | "skipped" | "timeout" | "changed";
+
+/** How a row count moved during the last hour of reads (a live table). */
+export type Movement = { rows_then: number; rows_now: number; change: number; minutes: number };
 
 export type ServerInfo = { key: "source" | "target"; label: string; host: string; configured: boolean };
 
@@ -50,7 +53,21 @@ export type TableRow = {
   columns: ColumnSummary | null;
   row_key: { kind: string; columns: string[] } | null;
   checks: { table: Level; columns: Level; rows: Level; data: Level };
-  data: { status: DataStatus; headline: string; checked_at: string; seconds: number; stale: boolean } | null;
+  data: {
+    status: DataStatus;
+    headline: string;
+    checked_at: string;
+    seconds: number;
+    /** the result no longer describes the table: other columns, another cutoff, or rows changed since */
+    stale: boolean;
+    stale_reason?: string | null;
+    changed_since?: { source: { then: number; now: number }; target: { then: number; now: number } } | null;
+    cutoff?: { column: string; value: string } | null;
+    /** a later check that could not finish; the result above is the last measured one */
+    last_attempt?: { status: DataStatus; headline: string; checked_at: string; error_kind?: string } | null;
+  } | null;
+  /** row counts still moving on either server (still being written to or copied into) */
+  live?: { source: Movement | null; target: Movement | null } | null;
   status: TableStatus;
   reason: string;
   reasons?: { severity: Level; text: string }[];
@@ -67,6 +84,10 @@ export type PairSummary = {
   only_in_target: number;
   /** required tables that neither database has */
   missing_everywhere?: number;
+  /** results that no longer describe their table */
+  out_of_date?: number;
+  /** tables whose row counts are still moving */
+  live?: number;
   verified: number;
   unverified: number;
   review: number;
@@ -111,6 +132,24 @@ export type Job = {
   step_started_at?: string | null;
   /** number of the newest activity entry */
   log_seq?: number;
+  /** waiting for a server that cannot be reached (VPN down?), or for the other section's run */
+  waiting?: { reason: string; hint?: string; paused: boolean; until?: number; since?: number; server?: string } | null;
+  /** weighted by rows; the ETA assumes the tables still to come are identical (one read each) */
+  progress?: {
+    fraction: number;
+    rows_done: number;
+    rows_total: number;
+    eta_seconds: number | null;
+    eta_is_minimum: boolean;
+    speed_rows_per_second: number | null;
+    pass: { n: number; of: number; label: string; elapsed: number; estimate: number | null } | null;
+  } | null;
+  /** the last run, when it did not finish (restart, failure, stop) and can be resumed */
+  resumable?: {
+    started_at: string; status: "running" | "paused" | "stopped" | "failed"; done: number; total: number | null;
+    tables: string; table: string | null; updated_at: string;
+  } | null;
+  resumed_from?: string | null;
 };
 
 export type LogEntry = {
@@ -128,6 +167,8 @@ export type Overview = {
   pairs: PairView[];
   job: Job;
   settings: { diff_rows_max: number; data_check_max_rows: number };
+  /** the options file (cutoff) cannot be read */
+  options_error?: string | null;
 };
 
 export type ColumnCompare = {
@@ -209,6 +250,7 @@ export const atnmApi = {
   status: (since?: number) =>
     call<Job & { log?: LogEntry[] }>(`/api/atnm/check/status${since != null ? `?since=${since}` : ""}`),
   cancel: () => post<{ cancelled: boolean; job: Job }>("/api/atnm/check/cancel", {}),
+  resume: () => post<Job>("/api/atnm/check/resume", {}),
   exportUrl: (pair: string | undefined, tables: Scope) =>
     `/api/atnm/export.csv?tables=${tables}${pair ? `&pair=${encodeURIComponent(pair)}` : ""}`,
 };

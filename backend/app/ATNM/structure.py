@@ -86,19 +86,24 @@ def _names(items, limit=4):
     return ", ".join(items[:limit]) + (f" and {len(items) - limit} more" if len(items) > limit else "")
 
 
-def table_view(key, src, tgt, saved):
+def table_view(key, src, tgt, saved, cutoff=None, live=None):
     """One table of a pair as the UI lists it: what exists where, how the columns and row
     counts compare, the last data check, one overall status and the reason for it.
 
     status: problem | review | verified (values identical) | unverified (structure and
     counts agree, values not checked yet).
+
+    A saved check is out of date (`stale`) when it was made on other columns, with another
+    cutoff, or when the row count of either table has changed since: "verified" never
+    outlives the data it was measured on. `live` ({source, target}: how the row counts
+    moved lately, see catalog.movement) marks a table still being written to.
     """
     s_t = src or tgt
     view = {"key": key, "schema": s_t["schema"], "table": s_t["table"],
             "in_source": src is not None, "in_target": tgt is not None,
             "rows": {"source": src["rows"] if src else None, "target": tgt["rows"] if tgt else None, "exact": False},
             "columns": None, "row_key": (src or {}).get("row_key") or (tgt or {}).get("row_key"),
-            "checks": {}, "data": None}
+            "checks": {}, "data": None, "live": live if live and any(live.values()) else None}
 
     if src is None or tgt is None:
         where = "RDS" if src else "ATNM"
@@ -112,14 +117,32 @@ def table_view(key, src, tgt, saved):
     cols = column_summary(rows)
     view["columns"] = cols
 
-    # The data check, when it was made on today's columns.
+    # The data check, while it still describes the tables as they are.
     data = None
     if saved:
-        stale = saved.get("signature") != signature(rows)
-        data = {k: saved.get(k) for k in ("status", "headline", "checked_at", "seconds")}
-        data["stale"] = stale
-        if not stale and saved.get("status") in ("identical", "different") and saved.get("rows"):
-            view["rows"] = {"source": saved["rows"]["source"], "target": saved["rows"]["target"], "exact": True,
+        expected = signature(rows) + (f"|cutoff:{cutoff}" if cutoff else "")
+        stale_reason = None
+        if saved.get("signature") != expected:
+            stale_reason = ("The cutoff changed since the last check." if "|cutoff:" in (saved.get("signature") or "")
+                            or cutoff else "The columns changed since the last check.")
+        measured = saved.get("rows") if saved.get("status") in ("identical", "different") else None
+        changed = None
+        if not stale_reason and measured and not cutoff:
+            # Metadata row counts equal the exact counts of an unchanged table; a difference
+            # means rows were added or removed after the check.
+            if measured["source"] != src["rows"] or measured["target"] != tgt["rows"]:
+                changed = {"source": {"then": measured["source"], "now": src["rows"]},
+                           "target": {"then": measured["target"], "now": tgt["rows"]}}
+                parts = [f"{side} {_fmt(c['then'])} → {_fmt(c['now'])}" for side, c in
+                         (("ATNM", changed["source"]), ("RDS", changed["target"])) if c["then"] != c["now"]]
+                stale_reason = f"Rows changed since the check ({', '.join(parts)})."
+        data = {k: saved.get(k) for k in ("status", "headline", "checked_at", "seconds", "cutoff")}
+        data["stale"] = bool(stale_reason)
+        data["stale_reason"] = stale_reason
+        data["changed_since"] = changed
+        data["last_attempt"] = saved.get("last_attempt")
+        if not stale_reason and measured:
+            view["rows"] = {"source": measured["source"], "target": measured["target"], "exact": True,
                             "metadata_source": src["rows"], "metadata_target": tgt["rows"]}
     view["data"] = data
 
@@ -131,7 +154,7 @@ def table_view(key, src, tgt, saved):
         data_level = "ok"
     elif data["status"] == "different":
         data_level = "problem"
-    else:   # error, locked, skipped
+    else:   # error, timeout, changed, locked, skipped: not measured
         data_level = "none"
     view["checks"] = {"table": "ok", "columns": cols["severity"], "rows": rows_level, "data": data_level}
 
@@ -170,8 +193,8 @@ def table_view(key, src, tgt, saved):
     else:
         view["status"] = "unverified"
         if data and data["stale"]:
-            view["reason"] = "The columns changed since the last data check: check the values again."
-        elif data and data["status"] in ("error", "locked", "skipped"):
+            view["reason"] = f"{data['stale_reason']} Check the values again."
+        elif data and data["status"] not in ("identical", "different"):
             view["reason"] = f"Values not checked: {data['headline']}"
         else:
             view["reason"] = (f"Same columns and the same row count ({_fmt(n_src)}); "
@@ -188,11 +211,11 @@ def absent_view(key, schema, table):
             "reason": "Required by the migration plan, but neither database has a table of this name."}
 
 
-def pair_tables(src_cat, tgt_cat, saved_of):
+def pair_tables(src_cat, tgt_cat, saved_of, cutoff_of=lambda key: None, live_of=lambda key: None):
     """Every table of both databases, ATNM tables first in name order, then RDS-only ones."""
     s, t = src_cat["tables"], tgt_cat["tables"]
     keys = sorted(s) + sorted(k for k in t if k not in s)
-    return [table_view(k, s.get(k), t.get(k), saved_of(k)) for k in keys]
+    return [table_view(k, s.get(k), t.get(k), saved_of(k), cutoff_of(k), live_of(k)) for k in keys]
 
 
 def summarize(tables):
@@ -205,6 +228,9 @@ def summarize(tables):
         "missing_in_target": sum(1 for v in tables if v["in_source"] and not v["in_target"]),
         "only_in_target": sum(1 for v in tables if v["in_target"] and not v["in_source"]),
         "missing_everywhere": sum(1 for v in tables if not v["in_source"] and not v["in_target"]),
+        # results that no longer describe the table, and tables still being written to
+        "out_of_date": sum(1 for v in tables if (v.get("data") or {}).get("stale")),
+        "live": sum(1 for v in tables if v.get("live")),
         "verified": by.get("verified", 0),
         "unverified": by.get("unverified", 0),
         "review": by.get("review", 0),

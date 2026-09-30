@@ -1,0 +1,16 @@
+# Optional settings of the ATNM -> RDS copy check (backend/app/ATNM/options.py).
+# Everything here is off until it is filled in; the file is read again when it changes.
+#
+# cutoff - for live tables. ATNM is still in use and RDS is still being copied into, so the
+# two are never read at the same moment. With a cutoff both servers compare only the rows up
+# to one moment, using a column of the table that says when the row was made or changed.
+# Tables not listed are compared in full. A check made with a cutoff says so in its result.
+#
+# cutoff:
+#   at: "2026-09-30T00:00:00"            # ISO 8601, the same moment for every listed table
+#   columns:
+#     AppMasterDB:                        # the ATNM database of the pair (ATNM_DB_<n>_SOURCE)
+#       dbo.ActivityTaskPlan: created_at  # schema.table: the column to compare it on
+#       dbo.task_daily: modified_on
+#     AppMasterEngDB:
+#       dbo.EngineeringTaskPlan: created_at

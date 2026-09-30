@@ -195,7 +195,7 @@ def _group(expr):
 class Side:
     """One table on one server, with the SQL that reduces it."""
 
-    def __init__(self, server, database, entry, cols, columns, key_idx, dialect):
+    def __init__(self, server, database, entry, cols, columns, key_idx, dialect, cutoff=None):
         self.server, self.database, self.entry = server, database, entry
         self.cols = cols            # this side's definition of each compared column, in the shared order
         self.columns = columns      # the shared Column of each
@@ -203,6 +203,10 @@ class Side:
         self.d = dialect
         self.chunks = _chunks(columns)
         self.table = f"{_q(entry['schema'])}.{_q(entry['table'])}"
+        if cutoff:
+            # Only the rows up to the cutoff, the same on both servers (a live table keeps growing).
+            self.table = (f"(SELECT * FROM {self.table} WHERE {_q(cutoff['column'])} <= "
+                          f"CONVERT(datetime2, '{cutoff['value']}', 126))")
 
     @property
     def h(self):
@@ -264,18 +268,35 @@ class Context:
     """A run in progress: lets a cancel stop the queries that are running, and tells
     `on_note` (when set) what the check is doing."""
 
-    def __init__(self, on_note=None):
+    def __init__(self, on_note=None, on_pass=None):
         self.cancelled = False
         self.lock = threading.Lock()
         self.cursors = set()
         self.on_note = on_note
+        self.on_pass = on_pass      # on_pass(event, **facts): a full read of a table starts / ends
+        self.stopped = threading.Event()
 
     def note(self, text, level="info", step=False):
         """What the check is doing now (`step=True`) or has just done."""
         if self.on_note:
             self.on_note(text, level, step)
 
+    def pass_start(self, n, of, label, rows):
+        """Full read `n` of about `of` over a table of `rows` rows begins."""
+        if self.on_pass:
+            self.on_pass("start", n=n, of=of, label=label, rows=rows)
+
+    def pass_end(self, rows, seconds):
+        """That read ended after `seconds` (the slower of the two servers)."""
+        if self.on_pass:
+            self.on_pass("end", rows=rows, seconds=seconds)
+
+    def wait(self, seconds):
+        """Sleep, but wake up at once on a cancel. True when cancelled."""
+        return self.stopped.wait(seconds) or self.cancelled
+
     def cancel(self):
+        self.stopped.set()
         with self.lock:
             self.cancelled = True
             for cur in list(self.cursors):
@@ -296,6 +317,17 @@ class _Runner:
         self.src, self.tgt, self.ctx = src, tgt, ctx
         self.stack = ExitStack()
         self.cons = {}
+        self.passes = {"n": 1, "of": 1, "rows": 0}     # full reads of the table: done so far / expected
+
+    def timed_pass(self, label, fn):
+        """One more full read of the table: reported before and after, for progress and ETA."""
+        p = self.passes
+        p["n"] = min(p["n"] + 1, p["of"])
+        self.ctx.pass_start(p["n"], p["of"], label, p["rows"])
+        started = time.time()
+        out = fn()
+        self.ctx.pass_end(p["rows"], time.time() - started)
+        return out
 
     def __enter__(self):
         for side in (self.src, self.tgt):
@@ -374,30 +406,44 @@ def _value(v, hide):
     return HIDDEN if hide else v
 
 
-def check_table(pair, src_entry, tgt_entry, src_server_info, tgt_server_info, ctx=None):
-    """Data check of one table of `pair`. Entries come from app.ATNM.catalog."""
+# The status of a check that could not finish, by the kind of failure (app.ATNM.conn.kind).
+FAILED_STATUS = {"timeout": "timeout", "changed": "changed", "locked": "locked"}
+
+
+def check_table(pair, src_entry, tgt_entry, src_server_info, tgt_server_info, ctx=None, cutoff=None):
+    """Data check of one table of `pair`. Entries come from app.ATNM.catalog; `cutoff`
+    ({column, value}) limits both sides to the rows up to that moment.
+
+    A check that cannot finish carries `error_kind` (connection, timeout, changed, login,
+    config, other) so the run can decide what to do: wait and retry, or report and go on."""
     ctx = ctx or Context()
     started = time.time()
     rows = structure.compare_columns(src_entry["columns"], tgt_entry["columns"])
     result = {"pair": pair.id, "key": src_entry["key"], "schema": src_entry["schema"], "table": src_entry["table"],
-              "checked_at": _now(), "signature": structure.signature(rows)}
+              "checked_at": _now(), "signature": structure.signature(rows) + (f"|cutoff:{cutoff}" if cutoff else ""),
+              "cutoff": cutoff}
     try:
-        result.update(_check(pair, src_entry, tgt_entry, rows, src_server_info, tgt_server_info, ctx))
+        result.update(_check(pair, src_entry, tgt_entry, rows, src_server_info, tgt_server_info, ctx, cutoff))
     except Skipped as exc:
         result.update(status="skipped", headline=str(exc), findings=[{"severity": "info", "text": str(exc)}])
     except conn.Locked as exc:
-        result.update(status="locked", headline=str(exc), findings=[{"severity": "info", "text": str(exc)}])
+        result.update(status="locked", error_kind="locked", headline=str(exc),
+                      findings=[{"severity": "info", "text": str(exc)}])
     except Stopped:
         raise
     except SideError as exc:
+        what = conn.kind(exc.error)
         message, hint = conn.explain(exc.error, exc.side.server, exc.side.database)
         text = f"{exc.side.server.label}: {message}" + (f" {hint}" if hint else "")
-        result.update(status="error", headline=f"Check failed: {text}", findings=[{"severity": "error", "text": text}])
+        status = FAILED_STATUS.get(what, "error")
+        result.update(status=status, error_kind=what, error_server=exc.side.server.key,
+                      headline=text if status != "error" else f"Check failed: {text}",
+                      findings=[{"severity": "error", "text": text}])
     result["seconds"] = round(time.time() - started, 1)
     return result
 
 
-def _check(pair, src_entry, tgt_entry, rows, src_info, tgt_info, ctx):
+def _check(pair, src_entry, tgt_entry, rows, src_info, tgt_info, ctx, cutoff=None):
     n_meta = max(src_entry["rows"], tgt_entry["rows"])
     if settings.DATA_CHECK_MAX_ROWS and n_meta > settings.DATA_CHECK_MAX_ROWS:
         raise Skipped(f"{_fmt(n_meta)} rows, over the {_fmt(settings.DATA_CHECK_MAX_ROWS)} row limit "
@@ -417,8 +463,12 @@ def _check(pair, src_entry, tgt_entry, rows, src_info, tgt_info, ctx):
             or sum(columns[i].width + 1 for i in key_idx) > CHUNK_CHARS):
         key_idx = []
     key_rows = [shared[i] for i in key_idx]
-    src = Side(settings.SOURCE, pair.source_db, src_entry, [r["source"] for r in shared], columns, key_idx, d)
-    tgt = Side(settings.TARGET, pair.target_db, tgt_entry, [r["target"] for r in shared], columns, key_idx, d)
+    if cutoff and not all(any(c["name"].lower() == cutoff["column"].lower() for c in e["columns"])
+                          for e in (src_entry, tgt_entry)):
+        raise Skipped(f"The cutoff column {cutoff['column']} is not in both tables.")
+    src = Side(settings.SOURCE, pair.source_db, src_entry, [r["source"] for r in shared], columns, key_idx, d, cutoff)
+    tgt = Side(settings.TARGET, pair.target_db, tgt_entry, [r["target"] for r in shared], columns, key_idx, d, cutoff)
+    n_rows = max(src_entry["rows"], tgt_entry["rows"])
 
     out = {"method": {"modern": d.modern, "key": [r["name"] for r in key_rows] or None,
                       "key_kind": (src_entry.get("row_key") or {}).get("kind") if key_rows else None},
@@ -433,12 +483,17 @@ def _check(pair, src_entry, tgt_entry, rows, src_info, tgt_info, ctx):
         ctx.note(f"Step 1 of 3 · Fingerprinting every row on both servers: about {_fmt(src_entry['rows'])} rows in "
                  f"{settings.SOURCE.label} and {_fmt(tgt_entry['rows'])} in {settings.TARGET.label}, "
                  f"{len(shared)} columns each.{key_text}", step=True)
+        ctx.pass_start(1, 1, "Fingerprinting every row", n_rows)
+        t0 = time.time()
         fs, ft = run.both(lambda s: s.fingerprint_sql(), what="the fingerprint")
+        ctx.pass_end(n_rows, time.time() - t0)
         fs, ft = fs[0], ft[0]
         n_src, n_tgt = int(fs["n"] or 0), int(ft["n"] or 0)
         out["rows"] = {"source": n_src, "target": n_tgt}
         same = (n_src == n_tgt and (fs["s1"] or 0) == (ft["s1"] or 0) and (fs["s2"] or 0) == (ft["s2"] or 0))
         ctx.note(f"Exact row counts: {_fmt(n_src)} in {settings.SOURCE.label}, {_fmt(n_tgt)} in {settings.TARGET.label}.")
+        if cutoff:
+            ctx.note(f"Only rows with {cutoff['column']} up to {cutoff['value']} were compared (cutoff).")
         if same:
             ctx.note("The fingerprints are equal: every value of every row is identical.", "ok")
         else:
@@ -456,6 +511,9 @@ def _check(pair, src_entry, tgt_entry, rows, src_info, tgt_info, ctx):
             return out
 
         out["status"] = "different"
+        batches = -(-len(shared) // BATCH_COLUMNS)
+        # The reads still to come: columns (one per batch), groups, rows, examples.
+        run.passes = {"n": 1, "of": 1 + batches + 3, "rows": n_rows}
         out["columns"] = _column_diffs(run, shared)
         out["diff"], out["examples"] = _row_diffs(run, src, tgt, shared, bool(key_rows))
 
@@ -500,7 +558,7 @@ def _column_diffs(run, shared):
         batch = idxs[start:start + BATCH_COLUMNS]
         span = f"columns {start + 1}–{start + len(batch)} of {len(idxs)}"
         run.ctx.note(f"Step 2 of 3 · Finding which columns differ: fingerprinting {span} on both servers.", step=True)
-        a, b = run.both(lambda s: s.columns_sql(batch), what=span)
+        a, b = run.timed_pass("Finding which columns differ", lambda: run.both(lambda s: s.columns_sql(batch), what=span))
         cs.update(a[0])
         ct.update(b[0])
     out = []
@@ -517,7 +575,8 @@ def _row_diffs(run, src, tgt, shared, keyed):
     by = "their key" if keyed else "their own hash (the table has no key)"
     run.ctx.note(f"Step 3 of 3 · Finding which rows differ: splitting the rows into {GROUPS:,} groups by {by} and "
                  "fingerprinting each group on both servers.", step=True)
-    gs, gt = run.both(lambda s: s.groups_sql(), what="the group fingerprints")
+    gs, gt = run.timed_pass("Fingerprinting groups of rows",
+                            lambda: run.both(lambda s: s.groups_sql(), what="the group fingerprints"))
     a = {r["g"]: (int(r["n"]), r["s"]) for r in gs}
     b = {r["g"]: (int(r["n"]), r["s"]) for r in gt}
     differing = sorted(g for g in set(a) | set(b) if a.get(g) != b.get(g))
@@ -542,7 +601,8 @@ def _row_diffs(run, src, tgt, shared, keyed):
 
     run.ctx.note(f"Step 3 of 3 · Reading the {len(chosen):,} differing groups row by row (keys and hashes only, no values).",
                  step=True)
-    rs, rt = run.both(lambda s: s.rows_sql(chosen), what="reading the differing groups")
+    rs, rt = run.timed_pass("Reading the differing rows",
+                            lambda: run.both(lambda s: s.rows_sql(chosen), what="reading the differing groups"))
     if keyed:
         # The key is unique in ATNM; RDS may hold it more than once, so keep every hash.
         sk, tk = {}, {}
@@ -563,7 +623,8 @@ def _row_diffs(run, src, tgt, shared, keyed):
         pick = changed[:EXAMPLES]
         if pick:
             run.ctx.note(f"Reading the values of {len(pick)} changed rows, as examples.", step=True)
-            vs, vt = run.both(lambda s: s.values_by_key_sql(len(pick)), {"src": tuple(pick), "tgt": tuple(pick)})
+            vs, vt = run.timed_pass("Reading example values", lambda: run.both(
+                lambda s: s.values_by_key_sql(len(pick)), {"src": tuple(pick), "tgt": tuple(pick)}))
             by_s, by_t = {r["k"]: r for r in vs}, {r["k"]: r for r in vt}
             changes = []
             for k in pick:
@@ -588,7 +649,8 @@ def _row_diffs(run, src, tgt, shared, keyed):
             hashes = [h for h, _ in counter.most_common(EXAMPLES)]
             if not hashes:
                 continue
-            rows = run.one(side, side.values_by_hash_sql(len(hashes)), tuple(hashes))
+            rows = run.timed_pass("Reading example rows",
+                                  lambda: run.one(side, side.values_by_hash_sql(len(hashes)), tuple(hashes)))
             examples[label] = [{names[i]: _value(r[f"v{i}"], names[i] in hide) for i in range(len(names))}
                                for r in rows]
     return diff, examples

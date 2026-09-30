@@ -120,6 +120,36 @@ _cache = {}
 _locks = {}
 _guard = threading.Lock()
 
+# Row counts seen at each fresh read, per table: a table whose count keeps moving is live
+# (still being written to, or still being copied into), so its check can only be a snapshot.
+_history = {}
+HISTORY_KEEP = 60
+LIVE_WINDOW = 3600      # seconds: a change within the last hour counts
+
+
+def _remember(server, database, result):
+    at = result["read_at"]
+    for key, t in result["tables"].items():
+        h = _history.setdefault((server.key, database.lower(), key), [])
+        if not h or h[-1][1] != t["rows"] or at - h[-1][0] > 300:
+            h.append((at, t["rows"]))
+            del h[:-HISTORY_KEEP]
+
+
+def movement(server, database, key):
+    """How the row count of a table moved during the last hour of reads - {rows_then,
+    rows_now, change, minutes} - or None when it did not move (or was read only once)."""
+    h = _history.get((server.key, database.lower(), key)) or []
+    if len(h) < 2:
+        return None
+    now_at, now_rows = h[-1]
+    recent = [x for x in h if now_at - x[0] <= LIVE_WINDOW]
+    then_at, then_rows = recent[0]
+    if then_rows == now_rows and all(r == now_rows for _, r in recent):
+        return None
+    return {"rows_then": then_rows, "rows_now": now_rows, "change": now_rows - then_rows,
+            "minutes": max(1, round((now_at - then_at) / 60))}
+
 
 def read(server, database, refresh=False):
     """The catalog of one database, reused for ATNM_CACHE_SECONDS. Raises the connection
@@ -133,4 +163,5 @@ def read(server, database, refresh=False):
             return hit
         result = _read(server, database)
         _cache[key] = result
+        _remember(server, database, result)
         return result

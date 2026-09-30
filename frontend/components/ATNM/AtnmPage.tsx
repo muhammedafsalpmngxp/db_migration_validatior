@@ -8,7 +8,7 @@ import {
   type ConnError, type Health, type Job, type LogEntry, type Overview, type PairSummary, type PairView, type Scope,
   type TableRow, type TableStatus,
 } from "./api";
-import { RunLog } from "./RunLog";
+import { duration, RunLog } from "./RunLog";
 import { SectionTabs } from "./SectionTabs";
 import { TableDetail } from "./TableDetail";
 
@@ -150,6 +150,16 @@ function Summary({ p, s, noun, labels }: { p: PairView; s: PairSummary; noun: st
           </span>
         ))}
         {s.missing_in_target > 0 && <span className="font-medium text-bad">{s.missing_in_target} tables missing in {labels.target}</span>}
+        {(s.out_of_date ?? 0) > 0 && (
+          <span className="font-medium text-warn" title="The table changed after its check, so the result no longer describes it">
+            {s.out_of_date} changed since their check
+          </span>
+        )}
+        {(s.live ?? 0) > 0 && (
+          <span className="text-warn" title="Row counts moved during the last hour: still being written to, or still being copied into">
+            {s.live} live tables
+          </span>
+        )}
         {(s.missing_everywhere ?? 0) > 0 && (
           <span className="font-medium text-bad">{s.missing_everywhere} required tables in neither database</span>
         )}
@@ -182,26 +192,38 @@ function Checks({ t }: { t: TableRow }) {
 
 const JOB_SCOPE: Record<string, string> = { required: "Required tables", all: "All tables", one: "One table" };
 
-function JobBar({ job, counts, onRun, onCancel }: {
+function JobBar({ job, counts, onRun, onCancel, onResume }: {
   job: Job | null;
   /** how many tables each button would check, across every database */
   counts: { required: number | null; all: number };
   onRun: (tables: Scope) => void;
   onCancel: () => void;
+  onResume: () => void;
 }) {
   if (job?.running) {
-    const pct = job.total ? Math.round((job.done * 100) / job.total) : 0;
+    // Weighted by rows when the backend measures it: 61 of 67 tables can still be most of the work.
+    const pct = job.progress ? Math.round(job.progress.fraction * 100)
+      : job.total ? Math.round((job.done * 100) / job.total) : 0;
     const what = JOB_SCOPE[job.scope?.tables ?? "all"] ?? "Tables";
+    const eta = job.progress?.eta_seconds != null ? duration(job.progress.eta_seconds) : null;
     return (
       <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="h-1.5 w-48 overflow-hidden rounded-full bg-surface-2">
-            <span className="block h-1.5 rounded-full bg-accent transition-all" style={{ width: `${pct}%` }} />
+          <span className="h-1.5 w-56 overflow-hidden rounded-full bg-surface-2"
+            title={job.progress ? "Weighted by the rows of each table" : undefined}>
+            <span className={`block h-1.5 rounded-full transition-all ${job.waiting?.paused ? "bg-bad" : "bg-accent"}`}
+              style={{ width: `${pct}%` }} />
           </span>
-          <span className="truncate text-xs text-muted">
-            {what}: {job.total ? `${job.done} of ${job.total} checked` : "reading the table lists…"}
-            {job.current && ` · now ${job.current}`}
+          <span className="num text-xs text-muted">
+            {what}: {job.total ? `${job.done} of ${job.total} tables` : "reading the table lists…"}
+            {job.progress && ` · ${pct}% of rows`}
+            {eta && ` · at least ${eta} left`}
           </span>
+          {job.waiting && (
+            <span className={`text-xs font-medium ${job.waiting.paused ? "text-bad" : "text-warn"}`}>
+              {job.waiting.paused ? `Paused: waiting for ${job.waiting.server ?? "the server"}` : `Waiting: ${job.waiting.reason}`}
+            </span>
+          )}
         </div>
         <button type="button" onClick={onCancel} disabled={job.cancelling}
           className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:border-bad hover:text-bad disabled:opacity-50">
@@ -210,8 +232,16 @@ function JobBar({ job, counts, onRun, onCancel }: {
       </div>
     );
   }
+  const r = job?.resumable;
   return (
     <div className="flex flex-wrap items-center gap-2">
+      {r && (
+        <button type="button" onClick={onResume}
+          title={`Start the unfinished run of ${new Date(r.started_at).toLocaleString()} again, leaving out the ${r.done} tables it finished`}
+          className="rounded-lg border border-accent px-3.5 py-2 text-xs font-medium text-accent hover:bg-accent-soft">
+          Resume last run <span className="num opacity-80">({r.done} of {r.total ?? "?"} done)</span>
+        </button>
+      )}
       {counts.required != null && (
         <button type="button" onClick={() => onRun("required")}
           title="Compare every row and value of the tables the migration uses (the source tables of the migration plan), in every database, in the background"
@@ -374,6 +404,17 @@ export function AtnmPage() {
     }
   }
 
+  async function resume() {
+    setActionError(null);
+    try {
+      const j = await atnmApi.resume();
+      lastDone.current = "";
+      setJob(j);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function cancel() {
     try {
       setJob((await atnmApi.cancel()).job);
@@ -497,7 +538,7 @@ export function AtnmPage() {
                 <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find a table"
                   className="ml-1 w-44 rounded-lg border border-border bg-surface px-3 py-1 text-xs outline-none placeholder:text-muted focus:border-accent" />
               </div>
-              <JobBar job={job} counts={runCounts} onRun={(tables) => run({ tables })} onCancel={cancel} />
+              <JobBar job={job} counts={runCounts} onRun={(tables) => run({ tables })} onCancel={cancel} onResume={resume} />
             </div>
             {actionError && <ErrorBox>{actionError}</ErrorBox>}
             {job && !job.running && job.error && <ErrorBox>The last check stopped: {job.error}</ErrorBox>}
@@ -517,6 +558,22 @@ export function AtnmPage() {
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-2 truncate text-sm font-medium">
                           <span className="truncate"><span className="font-normal text-muted">{t.schema}.</span>{t.table}</span>
+                          {t.live && (
+                            <span className="shrink-0 rounded bg-warn-soft px-1.5 py-px text-[10px] font-medium text-warn"
+                              title={[t.live.source && `${labels.source}: ${fmt(t.live.source.rows_then)} → ${fmt(t.live.source.rows_now)} in ${t.live.source.minutes} min`,
+                                t.live.target && `${labels.target}: ${fmt(t.live.target.rows_then)} → ${fmt(t.live.target.rows_now)} in ${t.live.target.minutes} min`]
+                                .filter(Boolean).join("; ")}>Live</span>
+                          )}
+                          {t.data?.changed_since && (
+                            <span className="shrink-0 rounded bg-warn-soft px-1.5 py-px text-[10px] font-medium text-warn"
+                              title={t.data.stale_reason ?? undefined}>Changed since check</span>
+                          )}
+                          {t.data?.last_attempt && !t.data.stale && (
+                            <span className="shrink-0 rounded bg-bad-soft px-1.5 py-px text-[10px] font-medium text-bad"
+                              title={`${t.data.last_attempt.headline} (the result shown is from ${new Date(t.data.checked_at).toLocaleString()})`}>
+                              Last check failed
+                            </span>
+                          )}
                           {view === "all" && t.required && (
                             <span className="shrink-0 rounded bg-accent-soft px-1.5 py-px text-[10px] font-medium text-accent"
                               title={`Used by the migration (mapping ${t.mapping})`}>Required</span>

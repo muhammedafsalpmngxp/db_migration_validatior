@@ -27,6 +27,16 @@ function since(iso: string | null | undefined, now: number) {
   return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
 }
 
+/** 45 s, 12 min, 1 h 20 min */
+export function duration(seconds: number | null | undefined) {
+  if (seconds == null) return null;
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
 const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 /** What the check is doing now, and everything it has done in this run. */
@@ -80,6 +90,31 @@ export function RunLog({ job, entries }: { job: Job | null; entries: LogEntry[] 
             <p className="text-sm">
               <span className="text-muted">Now: </span>{job.step}
               {job.step_started_at && <span className="num text-muted"> · {since(job.step_started_at, now)}</span>}
+            </p>
+          )}
+          {job?.progress?.pass && (
+            <p className="num text-xs text-muted">
+              Read {job.progress.pass.n} of {job.progress.pass.of > 1 ? `about ${job.progress.pass.of}` : "1"} of this table
+              {" · "}{duration(job.progress.pass.elapsed)}
+              {job.progress.pass.estimate ? ` of about ${duration(job.progress.pass.estimate)}` : ""}
+              {job.progress.speed_rows_per_second ? ` · about ${fmt(job.progress.speed_rows_per_second)} rows a second` : ""}
+            </p>
+          )}
+          {job?.progress && (
+            <p className="num text-xs text-muted">
+              {Math.round(job.progress.fraction * 100)}% of the rows done
+              {job.progress.eta_seconds != null
+                ? ` · at least ${duration(job.progress.eta_seconds)} left (more if other tables differ too)`
+                : " · time left: measured once a larger table has been read"}
+            </p>
+          )}
+          {job?.waiting && (
+            <p className={`rounded-md px-3 py-2 text-sm ${job.waiting.paused ? "bg-bad-soft text-bad" : "bg-warn-soft text-warn"}`}>
+              <strong className="font-semibold">{job.waiting.paused ? "Paused: " : "Waiting: "}</strong>
+              {job.waiting.reason} {job.waiting.hint}
+              {job.waiting.paused
+                ? " The run goes on by itself once the server answers."
+                : job.waiting.until ? ` Trying again in ${Math.max(0, Math.round(job.waiting.until - now / 1000))} s.` : ""}
             </p>
           )}
           {job?.cancelling && <p className="text-xs text-warn">Stopping: cancelling the queries on both servers…</p>}

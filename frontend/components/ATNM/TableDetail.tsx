@@ -256,7 +256,27 @@ export function TableDetail({ pair, tableKey, labels, job, version, onCheck }: {
           </div>
           {detail.data && t.data?.stale && (
             <p className="mb-2 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn">
-              The columns changed after this check was made, so the result below is out of date. Check again.
+              {t.data.stale_reason ?? "The table changed after this check was made."} The result below is out of date: check again.
+            </p>
+          )}
+          {t.data?.last_attempt && (
+            <p className="mb-2 rounded-lg bg-bad-soft px-3 py-2 text-xs text-bad">
+              The last check ({new Date(t.data.last_attempt.checked_at).toLocaleString()}) could not finish:{" "}
+              {t.data.last_attempt.headline} The result below is the last one that was measured.
+            </p>
+          )}
+          {t.data?.cutoff && (
+            <p className="mb-2 rounded-lg bg-surface-2 px-3 py-2 text-xs text-muted">
+              Compared only the rows with {t.data.cutoff.column} up to {t.data.cutoff.value} (cutoff), on both servers.
+            </p>
+          )}
+          {t.live && (
+            <p className="mb-2 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn">
+              This table is live: its row count is still moving
+              {t.live.source && ` in ${labels.source} (${fmt(t.live.source.rows_then)} → ${fmt(t.live.source.rows_now)} in ${t.live.source.minutes} min)`}
+              {t.live.source && t.live.target && " and"}
+              {t.live.target && ` in ${labels.target} (${fmt(t.live.target.rows_then)} → ${fmt(t.live.target.rows_now)} in ${t.live.target.minutes} min)`}.
+              A check is a snapshot of one moment; for sign-off, compare at a cutoff or while the copy is paused.
             </p>
           )}
           <Values data={detail.data} labels={labels} />

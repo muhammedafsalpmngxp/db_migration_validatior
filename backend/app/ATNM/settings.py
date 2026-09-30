@@ -1,4 +1,4 @@
-﻿"""Settings of the ATNM copy check, read from backend/.env (app.config loads the file).
+"""Settings of the ATNM copy check, read from backend/.env (app.config loads the file).
 
 Two servers take part:
   source  the client's ATNM server, reached over the VPN (ATNM_MSSQL_*)
@@ -126,6 +126,15 @@ CACHE_SECONDS = int(_env("ATNM_CACHE_SECONDS", str(config.TABLE_CACHE_SECONDS)))
 RESULT_FILE = Path(_env("ATNM_RESULT_FILE", config.BACKEND_DIR / ".cache" / "atnm_checks.json"))
 # Every step of every check, also shown in the backend console (see app/ATNM/activity.py).
 LOG_FILE = Path(_env("ATNM_LOG_FILE", config.BACKEND_DIR / ".cache" / "atnm.log"))
+# The run in progress (its tables, and which are done), so it can be resumed after a restart.
+RUN_FILE = Path(_env("ATNM_RUN_FILE", config.BACKEND_DIR / ".cache" / "atnm_run.json"))
+# Optional per-table settings, such as a cutoff for live tables (see app/ATNM/options.py).
+OPTIONS_FILE = Path(_env("ATNM_OPTIONS_FILE", config.BACKEND_DIR / "mappings" / "atnm.yaml"))
+
+# A lost connection (VPN down) is tried again after these waits, in seconds; then the run
+# pauses and tries every ATNM_PAUSE_POLL seconds until the server can be reached again.
+RETRY_WAITS = [int(x) for x in str(_env("ATNM_RETRY_WAITS", "30,60,120")).split(",") if x.strip()]
+PAUSE_POLL = int(_env("ATNM_PAUSE_POLL", "30"))
 
 
 def pair(pair_id):

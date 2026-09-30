@@ -23,7 +23,13 @@ The header switches between the two stages of the migration:
   changed. **Required tables** (the default view, and **Check required tables**) are the
   tables the migration uses: the source tables of `mappings/migration_plan.yaml` (62 in
   `AppMasterDB`, 5 in `AppMasterEngDB`), so the list follows the plan; **All tables** /
-  **Check all tables** covers every table of both databases. Code in `backend/app/ATNM/` and `frontend/components/ATNM/`; settings
+  **Check all tables** covers every table of both databases. A run survives a VPN drop
+  (tries again, then pauses and goes on by itself when ATNM answers), never replaces a
+  measured result with a failed attempt, and can be **resumed** after a restart or a stop.
+  A result expires when the table's row count changes after its check; tables whose counts
+  keep moving are marked **Live**. For live tables a cutoff can be set in
+  `mappings/atnm.yaml`. For long runs start the backend without `--reload`: a reload stops
+  the run (it can then be resumed). Code in `backend/app/ATNM/` and `frontend/components/ATNM/`; settings
   `ATNM_*` in `backend/.env` (see `.env.example`); results in
   `backend/.cache/atnm_checks.json`; **Download CSV** exports the list.
 - **RDS** (`/`) - the RDS sources against the target `AlTasnimBI`, described below.

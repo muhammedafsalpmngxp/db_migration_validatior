@@ -5,6 +5,7 @@
     GET  /api/atnm/table           one table: its columns side by side and its last data check
     POST /api/atnm/check           run the data check in the background (all, one pair, one table)
     GET  /api/atnm/check/status    progress of that run, and what it is doing (?since=n: its activity log)
+    POST /api/atnm/check/resume    start the last unfinished run again, skipping what it finished
     POST /api/atnm/check/cancel    stop it
     GET  /api/atnm/export.csv      the overview as a spreadsheet
 """
@@ -18,7 +19,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from . import catalog, conn, jobs, required, settings, structure
+from . import catalog, conn, jobs, options, required, settings, structure
 
 router = APIRouter(prefix="/api/atnm", tags=["ATNM"])
 
@@ -53,6 +54,12 @@ def _read_all(pairs, refresh):
         return dict(pool.map(one, work))
 
 
+def _live(p, key):
+    """How the row counts of a table moved lately on each server (None: not moving)."""
+    return {"source": catalog.movement(settings.SOURCE, p.source_db, key),
+            "target": catalog.movement(settings.TARGET, p.target_db, key)}
+
+
 def _pair_view(p, src, tgt):
     base = {**p.public(), "source": None, "target": None, "errors": [], "tables": [], "summary": None}
     for side, cat in (("source", src), ("target", tgt)):
@@ -63,7 +70,8 @@ def _pair_view(p, src, tgt):
                           "tables": len(cat["tables"])}
     if base["errors"]:
         return base
-    tables = structure.pair_tables(src, tgt, lambda key: jobs.store.get(p.id, key))
+    tables = structure.pair_tables(src, tgt, lambda key: jobs.store.get(p.id, key),
+                                   cutoff_of=lambda key: options.cutoff(p, key), live_of=lambda key: _live(p, key))
     # The tables the migration uses (the plan's source tables); one it names that neither
     # database has is listed too, as a problem.
     try:
@@ -129,6 +137,7 @@ def overview(refresh: bool = False):
         "pairs": pairs,
         "job": jobs.status(),
         "settings": {"diff_rows_max": settings.DIFF_ROWS_MAX, "data_check_max_rows": settings.DATA_CHECK_MAX_ROWS},
+        "options_error": options.error(),
     }
 
 
@@ -147,7 +156,7 @@ def table(pair: str = Query(..., description="Pair id, e.g. 1"),
     if s is None and t is None:
         raise HTTPException(status_code=404, detail=f"No table {table!r} in {p.source_db} or {p.target_db}.")
     saved = jobs.store.get(p.id, key)
-    view = structure.table_view(key, s, t, saved)
+    view = structure.table_view(key, s, t, saved, options.cutoff(p, key), _live(p, key))
     columns = structure.compare_columns(s["columns"] if s else [], t["columns"] if t else [])
     return {"pair": p.public(), "table": view, "columns": columns, "data": saved,
             "job": jobs.status()}
@@ -187,6 +196,17 @@ def check(req: CheckRequest):
 def check_status(since: int | None = Query(None, ge=0, description="Activity entries after this number; 0 = all kept")):
     """Progress of the run, the step in progress, and (with `since`) its activity log."""
     return jobs.status(since)
+
+
+@router.post("/check/resume")
+def check_resume():
+    """Start the last unfinished run again, leaving out the tables it had finished."""
+    started = jobs.resume()
+    if started is None:
+        raise HTTPException(status_code=409, detail="There is no unfinished run to resume.")
+    if not started:
+        raise HTTPException(status_code=409, detail="A data check is already running.")
+    return jobs.status()
 
 
 @router.post("/check/cancel")
