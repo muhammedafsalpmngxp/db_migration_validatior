@@ -9,6 +9,25 @@ database on Microsoft SQL Server.
 | B | source | `AppMasterEngDB_Local` |
 | T | target | `AlTasnimBI` |
 
+## Two sections
+
+The header switches between the two stages of the migration:
+
+- **ATNM** (`/atnm`) - the client's ATNM server (over the VPN) against its copy on RDS:
+  `AppMasterDB` → `AppMasterDB_UAT` and `AppMasterEngDB` → `AppMasterEngDB_Local`. Every
+  table of each database is listed from the server (nothing is configured per table) and
+  checked for: the table exists on RDS, the same columns with the same types, the same
+  row count and the same values. The values are compared without moving data between the
+  servers: each server fingerprints its own rows (SHA-256 over every value), and only
+  where fingerprints differ are keys and hashes read to find the rows missing, extra or
+  changed. **Required tables** (the default view, and **Check required tables**) are the
+  tables the migration uses: the source tables of `mappings/migration_plan.yaml` (62 in
+  `AppMasterDB`, 5 in `AppMasterEngDB`), so the list follows the plan; **All tables** /
+  **Check all tables** covers every table of both databases. Code in `backend/app/ATNM/` and `frontend/components/ATNM/`; settings
+  `ATNM_*` in `backend/.env` (see `.env.example`); results in
+  `backend/.cache/atnm_checks.json`; **Download CSV** exports the list.
+- **RDS** (`/`) - the RDS sources against the target `AlTasnimBI`, described below.
+
 ## Layout
 
 ```

@@ -599,3 +599,10 @@ def ai_summary(req: SummaryRequest):
     result = ai.make_result(m.id, check, facts, answer, usage, bad, attempts, links=links)
     _ai.put(result)
     return {**result, "stale": False}
+
+
+# ---- ATNM -> RDS copy check (app/ATNM) --------------------------------------------------
+
+from .ATNM.api import router as atnm_router  # noqa: E402
+
+app.include_router(atnm_router)

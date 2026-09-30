@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, fmt, fmtSize, type CompareResult, type Health, type Scope } from "@/lib/api";
 import { AiSummary } from "@/components/AiSummary";
+import { SectionTabs } from "@/components/ATNM/SectionTabs";
 import { ColumnComparison, ColumnList } from "@/components/ColumnComparison";
 import { DataCheck } from "@/components/DataCheck";
 import { KeysView } from "@/components/KeysView";
@@ -109,6 +110,7 @@ export default function Home() {
           <button type="button" onClick={() => navigate(null)} className="text-base font-semibold tracking-tight hover:text-accent">
             Migration Validator
           </button>
+          <SectionTabs current="rds" />
           {readAt && <span className="text-xs text-muted" title="Row counts and columns are read from the databases">Live · read {readAt}</span>}
         </div>
         <DatabaseBar health={health} scope={scope} />
