@@ -23,6 +23,7 @@ function MemberCard({ m, onSelect }: { m: Member; onSelect?: (ref: string) => vo
         {m.role && <Badge tone="neutral">{m.role}</Badge>}
         {!m.exists && <Badge tone="bad">missing</Badge>}
         {m.locked && <Badge tone="warn" title="Held by another session, probably a load in progress">locked</Badge>}
+        {m.busy && <Badge tone="info" title="Another session is writing to it: rows counted directly, including ones not committed yet">loading</Badge>}
       </div>
       <div className="num mt-1 flex flex-wrap gap-x-3 pl-7 text-xs text-muted">
         <span>{fmt(m.rows)} rows</span>
@@ -54,6 +55,7 @@ function CheckPanel({ check, label }: { check: RowCheck; label: string }) {
       <div className="flex flex-col gap-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-muted">{label}</span>
         <span className="flex items-center gap-2"><Badge tone={c.tone}>{c.label}</Badge><span className="text-sm text-muted">{check.rule}</span></span>
+        {check.note && <span className="text-xs text-info">{check.note}</span>}
       </div>
       {(check.status === "match" || check.status === "mismatch") && check.expected != null && (
         <dl className="num ml-auto flex gap-6 text-sm">

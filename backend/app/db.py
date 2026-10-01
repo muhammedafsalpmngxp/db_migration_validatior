@@ -34,6 +34,21 @@ JOIN sys.schemas s ON s.schema_id = t.schema_id
 WHERE t.object_id IN ({ids})
 """
 
+# A session with an open transaction that writes to a table holds its allocation metadata
+# (sys.partitions, sys.allocation_units), so STATS_SQL times out on it although the rows can
+# still be read. Its identity and column count come from the catalog rows that stay readable,
+# and its rows are counted directly, read uncommitted: the count includes rows that are not
+# committed yet, so the entry is marked `busy`. Size is unknown until the lock is released.
+# A table whose schema itself is held (Sch-M: truncate, rebuild, alter) cannot even be
+# counted and stays `locked`.
+BUSY_SQL = """
+SELECT t.object_id, s.name AS [schema], t.name AS [table], t.create_date AS created,
+       (SELECT COUNT(*) FROM sys.columns c WHERE c.object_id = t.object_id) AS [columns]
+FROM sys.tables t
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE t.object_id = ?
+"""
+
 COLUMNS_SQL = """
 SELECT c.column_id AS [position], c.name AS [name], ty.name AS [type],
        c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity,
@@ -49,6 +64,8 @@ ORDER BY c.column_id
 """
 
 LOCKED = object()
+# Lock wait (ms) for the one-table-at-a-time retry after a batch has already timed out.
+PROBE_LOCK_TIMEOUT_MS = 250
 
 
 class TableLocked(Exception):
@@ -58,6 +75,12 @@ class TableLocked(Exception):
 def is_lock_timeout(exc):
     text = str(exc)
     return "1222" in text or "Lock request time out" in text
+
+
+def is_query_timeout(exc):
+    """The statement ran past the connection's timeout (ODBC state HYT00)."""
+    text = str(exc)
+    return "HYT00" in text or "Query timeout expired" in text
 
 
 def connect(side):
@@ -122,14 +145,54 @@ def _stats(cur, ids):
     except pyodbc.Error as exc:
         if not is_lock_timeout(exc):
             raise
+    # The batch already waited the full lock timeout, so what is still held is held by a long
+    # transaction: probe each table briefly, or 40 busy tables would cost 40 full waits.
     out = {}
-    for i in ids:
-        try:
-            out.update(run([i]))
-        except pyodbc.Error as exc:
-            if not is_lock_timeout(exc):
-                raise
-            out[i] = LOCKED
+    cur.execute(f"SET LOCK_TIMEOUT {min(int(config.MSSQL_LOCK_TIMEOUT_MS), PROBE_LOCK_TIMEOUT_MS)}")
+    try:
+        for i in ids:
+            try:
+                out.update(run([i]))
+            except pyodbc.Error as exc:
+                if not is_lock_timeout(exc):
+                    raise
+                out[i] = LOCKED
+    finally:
+        cur.execute(f"SET LOCK_TIMEOUT {int(config.MSSQL_LOCK_TIMEOUT_MS)}")
+    return out
+
+
+def _busy_stats(con, cur, ids):
+    """BUSY_SQL facts plus a direct row count for each object_id whose STATS_SQL row is
+    locked; LOCKED where even that is blocked or the time allowed runs out."""
+    out = {i: LOCKED for i in ids}
+    if not ids or config.MSSQL_BUSY_COUNT_TIMEOUT <= 0 or config.MSSQL_BUSY_COUNT_BUDGET <= 0:
+        return out
+    deadline = time.time() + config.MSSQL_BUSY_COUNT_BUDGET
+    cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
+    try:
+        for i in ids:
+            left = deadline - time.time()
+            if left < 1:
+                break
+            con.timeout = max(1, int(min(config.MSSQL_BUSY_COUNT_TIMEOUT, left)))
+            try:
+                cur.execute(BUSY_SQL, int(i))
+                names = [d[0] for d in cur.description]
+                found = cur.fetchone()
+                if found is None:           # dropped since it was resolved
+                    continue
+                row = dict(zip(names, found))
+                # Names from the catalog, never from input.
+                count = cur.execute(
+                    f"SELECT COUNT_BIG(*) FROM {_quote(row['schema'])}.{_quote(row['table'])}").fetchone()[0]
+            except pyodbc.Error as exc:
+                if not (is_lock_timeout(exc) or is_query_timeout(exc)):
+                    raise
+                continue
+            out[i] = {**row, "rows": count, "size_kb": None, "busy": True}
+    finally:
+        con.timeout = config.MSSQL_QUERY_TIMEOUT
     return out
 
 
@@ -142,7 +205,9 @@ def describe_tables(side, names, refresh=False):
 
     `names` is a list of (schema, table). Returns {(schema.lower(), table.lower()): entry}
     with the real schema/table names, object_id, rows, columns, size_kb and created - or
-    `locked: True` when another session holds the table. Missing tables are left out.
+    `locked: True` when another session holds the table. `busy: True` means another session
+    is writing to it: its rows were counted directly and include uncommitted ones, and its
+    size is unknown. Missing tables are left out.
     """
     names = sorted(set(names), key=lambda n: (n[0].lower(), n[1].lower()))
     wanted = frozenset((s.lower(), t.lower()) for s, t in names)
@@ -160,23 +225,28 @@ def describe_tables(side, names, refresh=False):
             ids = _resolve(cur, names)
             found = [oid for oid in ids.values() if oid is not None and oid is not LOCKED]
             stats = _stats(cur, found) if found else {}
+            blocked = [oid for oid in found if stats.get(oid, LOCKED) is LOCKED]
+            if blocked:
+                stats.update(_busy_stats(con, cur, blocked))
         for (s, t), oid in ids.items():
             if oid is None:
                 continue
             key = (s.lower(), t.lower())
             row = LOCKED if oid is LOCKED else stats.get(oid, LOCKED)
             if row is LOCKED:
-                result[key] = {"schema": s, "table": t, "object_id": None, "locked": True,
+                result[key] = {"schema": s, "table": t, "object_id": None, "locked": True, "busy": False,
                                "rows": None, "columns": None, "size_kb": None, "created": None}
                 continue
+            busy = bool(row.get("busy"))
             result[key] = {
                 "schema": row["schema"],
                 "table": row["table"],
                 "object_id": row["object_id"],
                 "locked": False,
+                "busy": busy,
                 "rows": int(row["rows"] or 0),
                 "columns": row["columns"],
-                "size_kb": int(row["size_kb"] or 0),
+                "size_kb": None if busy else int(row["size_kb"] or 0),
                 "created": row["created"].isoformat(timespec="seconds") if row["created"] else None,
             }
     with _cache_lock:
@@ -259,8 +329,9 @@ ORDER BY i.is_primary_key DESC, i.name, ic.key_ordinal
 """
 
 # Both directions: keys this table holds (parent = this table) and keys pointing at it.
-# Row counts of both ends come from sys.partitions, like everywhere else.
-FOREIGN_KEYS_SQL = """
+# Row counts of both ends come from sys.partitions, like everywhere else - or, when another
+# session is writing to one of them (see BUSY_SQL), are counted table by table.
+_FOREIGN_KEYS_SQL = """
 SELECT fk.name, fk.parent_object_id, fk.referenced_object_id,
        fk.is_disabled, fk.is_not_trusted,
        fk.delete_referential_action_desc AS on_delete,
@@ -270,10 +341,7 @@ SELECT fk.name, fk.parent_object_id, fk.referenced_object_id,
        OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS ref_schema,
        OBJECT_NAME(fk.referenced_object_id) AS ref_table,
        pc.name AS parent_column, rc.name AS ref_column,
-       (SELECT SUM(p.rows) FROM sys.partitions p
-         WHERE p.object_id = fk.parent_object_id AND p.index_id IN (0, 1)) AS parent_rows,
-       (SELECT SUM(p.rows) FROM sys.partitions p
-         WHERE p.object_id = fk.referenced_object_id AND p.index_id IN (0, 1)) AS ref_rows
+       {counts}
 FROM sys.foreign_keys fk
 JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
 JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
@@ -281,6 +349,50 @@ JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id 
 WHERE fk.parent_object_id = ? OR fk.referenced_object_id = ?
 ORDER BY fk.name, fkc.constraint_column_id
 """
+FOREIGN_KEYS_SQL = _FOREIGN_KEYS_SQL.format(counts="""(SELECT SUM(p.rows) FROM sys.partitions p
+         WHERE p.object_id = fk.parent_object_id AND p.index_id IN (0, 1)) AS parent_rows,
+       (SELECT SUM(p.rows) FROM sys.partitions p
+         WHERE p.object_id = fk.referenced_object_id AND p.index_id IN (0, 1)) AS ref_rows""")
+FOREIGN_KEYS_NOCOUNT_SQL = _FOREIGN_KEYS_SQL.format(counts="NULL AS parent_rows, NULL AS ref_rows")
+ROWS_SQL = "SELECT SUM(p.rows) FROM sys.partitions p WHERE p.object_id = ? AND p.index_id IN (0, 1)"
+
+
+def _foreign_keys_counted(side, object_id):
+    """FOREIGN_KEYS_SQL rows with each end counted on its own: from sys.partitions where that
+    is free, else directly (read uncommitted). A lock timeout still raises."""
+    with closing(connect(side)) as con:
+        cur = con.cursor()
+        cur.execute(FOREIGN_KEYS_NOCOUNT_SQL, (object_id, object_id))
+        names = [d[0] for d in cur.description]
+        rows = [dict(zip(names, r)) for r in cur.fetchall()]
+        counts = {}
+        for r in rows:
+            for oid, schema, table in ((r["parent_object_id"], r["parent_schema"], r["parent_table"]),
+                                       (r["referenced_object_id"], r["ref_schema"], r["ref_table"])):
+                if oid in counts:
+                    continue
+                try:
+                    counts[oid] = cur.execute(ROWS_SQL, oid).fetchone()[0]
+                    continue
+                except pyodbc.Error as exc:
+                    if not is_lock_timeout(exc) or config.MSSQL_BUSY_COUNT_TIMEOUT <= 0:
+                        raise
+                cur.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
+                con.timeout = config.MSSQL_BUSY_COUNT_TIMEOUT
+                try:
+                    # Names from the catalog, never from input.
+                    counts[oid] = cur.execute(
+                        f"SELECT COUNT_BIG(*) FROM {_quote(schema)}.{_quote(table)}").fetchone()[0]
+                except pyodbc.Error as exc:
+                    if is_query_timeout(exc):
+                        raise TableLocked(f"{schema}.{table}") from exc
+                    raise
+                finally:
+                    con.timeout = config.MSSQL_QUERY_TIMEOUT
+        for r in rows:
+            r["parent_rows"] = counts[r["parent_object_id"]]
+            r["ref_rows"] = counts[r["referenced_object_id"]]
+        return rows
 
 
 def table_keys(side, object_id):
@@ -290,7 +402,12 @@ def table_keys(side, object_id):
     """
     try:
         key_rows = query(side, KEYS_SQL, (object_id,))
-        fk_rows = query(side, FOREIGN_KEYS_SQL, (object_id, object_id))
+        try:
+            fk_rows = query(side, FOREIGN_KEYS_SQL, (object_id, object_id))
+        except pyodbc.Error as exc:
+            if not is_lock_timeout(exc):
+                raise
+            fk_rows = _foreign_keys_counted(side, object_id)
     except pyodbc.Error as exc:
         if is_lock_timeout(exc):
             raise TableLocked(str(object_id)) from exc

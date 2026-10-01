@@ -76,6 +76,7 @@ def _table_view(ref, entry, **extra):
         "table": entry["table"] if entry else ref.table,
         "exists": entry is not None,
         "locked": bool(entry and entry["locked"]),
+        "busy": bool(entry and entry.get("busy")),
         "rows": entry["rows"] if entry else None,
         "columns": entry["columns"] if entry else None,
         "size_kb": entry["size_kb"] if entry else None,
@@ -85,17 +86,24 @@ def _table_view(ref, entry, **extra):
 
 
 def _row_check(m, live):
-    rows, locked = {}, []
+    rows, locked, busy = {}, [], []
     for member in m.sources + m.targets:
         e = _entry(live, member.ref)
         rows[member.ref.key] = e["rows"] if e else None
         if e and e["locked"]:
             locked.append(member.ref.table)
+        if e and e.get("busy"):
+            busy.append(member.ref.table)
     check = compare.row_check(m, rows)
     if locked and check["status"] not in ("excluded", "info"):
         check = {**check, "status": "locked",
                  "rule": f"{', '.join(locked)} is locked by another session (a load in progress?); "
                          "its row count cannot be read until it is released."}
+    elif busy and check["status"] not in ("excluded", "info"):
+        check = {**check, "busy": busy,
+                 "note": f"{', '.join(busy)} is being written to by another session right now: its rows were "
+                         "counted directly, including rows not committed yet, so the count may still change. "
+                         "Press Refresh once the load has finished."}
     return check
 
 
@@ -139,6 +147,7 @@ def scope(refresh: bool = False):
     members = [t for m in plan.mappings for t in m.sources + m.targets]
     missing = sum(1 for t in members if _entry(live, t.ref) is None)
     locked = sorted({t.ref.ref for t in members if (_entry(live, t.ref) or {}).get("locked")})
+    busy = sorted({t.ref.ref for t in members if (_entry(live, t.ref) or {}).get("busy")})
     return {
         "databases": [_database(s) for s in config.DATABASES],
         "read_at": min(filter(None, (db.read_at(s) for s in config.DATABASES)), default=time.time()),
@@ -150,6 +159,7 @@ def scope(refresh: bool = False):
             "checks": statuses,
             "missing_tables": missing,
             "locked_tables": locked,
+            "busy_tables": busy,
         },
     }
 
@@ -606,3 +616,10 @@ def ai_summary(req: SummaryRequest):
 from .ATNM.api import router as atnm_router  # noqa: E402
 
 app.include_router(atnm_router)
+
+
+# ---- Renamed columns, decided by the data (app/renames.py) -------------------------------
+
+from .renames import router as renames_router  # noqa: E402
+
+app.include_router(renames_router)

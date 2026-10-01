@@ -35,6 +35,12 @@ MSSQL_QUERY_TIMEOUT = int(_env("MSSQL_QUERY_TIMEOUT", "60"))
 MSSQL_LOCK_TIMEOUT_MS = int(_env("MSSQL_LOCK_TIMEOUT_MS", "2000"))
 # An exact COUNT(*) reads the whole table; the largest source table has ~73M rows.
 MSSQL_COUNT_TIMEOUT = int(_env("MSSQL_COUNT_TIMEOUT", "300"))
+# A table another session is writing to (an open transaction) keeps its row count metadata
+# locked though its rows stay readable: such a table is counted directly instead, read
+# uncommitted. Seconds one such count may take, and all of them together per database read;
+# 0 = never count directly (the table is then reported as locked, as before).
+MSSQL_BUSY_COUNT_TIMEOUT = int(_env("MSSQL_BUSY_COUNT_TIMEOUT", "60"))
+MSSQL_BUSY_COUNT_BUDGET = int(_env("MSSQL_BUSY_COUNT_BUDGET", "120"))
 
 # ---- The three databases -----------------------------------------------------
 # The keys A / B / T are fixed: the mapping file refers to tables as A.dbo.X, B.dbo.X

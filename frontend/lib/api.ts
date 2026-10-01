@@ -18,6 +18,9 @@ export type TableInfo = {
   exists: boolean;
   /** Held by another session (a load in progress); its facts cannot be read right now. */
   locked: boolean;
+  /** Another session is writing to it: rows were counted directly (uncommitted ones
+   *  included) and its size is unknown until the load finishes. */
+  busy?: boolean;
   rows: number | null;
   columns: number | null;
   size_kb: number | null;
@@ -33,6 +36,9 @@ export type RowCheck = {
   delta: number | null;
   delta_pct: number | null;
   status: CheckStatus;
+  /** Tables of the mapping another session is writing to, and what that means for the count. */
+  busy?: string[];
+  note?: string;
 };
 
 export type ScopeTable = TableInfo & {
@@ -53,6 +59,7 @@ export type Scope = {
     checks: Partial<Record<CheckStatus, number>>;
     missing_tables: number;
     locked_tables: string[];
+    busy_tables?: string[];
   };
 };
 

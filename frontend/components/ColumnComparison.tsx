@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { Column, ColumnRow, ColumnStatus, Comparison, MatchMethod } from "@/lib/api";
 import { Badge, Card, COLUMN_STATUS, ErrorBox } from "./ui";
+import { Evidence, EvidenceNote, mergeRows, RenamePanel, targetResult, useRenames } from "./Renames/RenameCheck";
 
 const METHOD_LABEL: Record<MatchMethod, string> = {
   declared: "declared in plan",
@@ -61,7 +62,7 @@ function Cell({ col, diffs }: { col: Column | null; diffs: ColumnRow["diffs"] })
   );
 }
 
-function ComparisonTable({ comparison }: { comparison: Comparison }) {
+function ComparisonTable({ comparison, renames }: { comparison: Comparison; renames?: ReturnType<typeof useRenames> }) {
   const [filter, setFilter] = useState<"all" | ColumnStatus>("all");
   const [query, setQuery] = useState("");
   if (comparison.locked) {
@@ -75,18 +76,22 @@ function ComparisonTable({ comparison }: { comparison: Comparison }) {
   if (!comparison.exists || !comparison.summary) {
     return <ErrorBox>{comparison.target} does not exist in the target database.</ErrorBox>;
   }
-  const s = comparison.summary;
+  // Renames the data proved join their two rows; without a rename result nothing changes.
+  const tr = renames ? targetResult(renames.result, comparison) : null;
+  const merged = mergeRows(comparison, tr);
+  const s = merged.summary;
   const q = query.trim().toLowerCase();
-  const rows = comparison.rows.filter((r) =>
+  const rows = merged.rows.filter((r) =>
     (filter === "all" || r.status === filter) &&
     (!q || [r.source?.name, r.target?.name].some((n) => n?.toLowerCase().includes(q))),
   );
 
   return (
     <div className="flex flex-col gap-3">
+      {renames && <RenamePanel state={renames} tr={tr} />}
       <div className="flex flex-wrap items-center gap-2">
         {FILTERS.map((f) => {
-          const n = f === "all" ? comparison.rows.length : s[f];
+          const n = f === "all" ? merged.rows.length : s[f];
           const active = filter === f;
           return (
             <button
@@ -138,9 +143,10 @@ function ComparisonTable({ comparison }: { comparison: Comparison }) {
               <tr key={`${r.source?.name ?? ""}|${r.target?.name ?? ""}|${i}`} className="border-t border-border align-top">
                 <Cell col={r.source} diffs={r.diffs} />
                 <td className="py-2 pr-3 text-xs">
-                  {r.match ? (
+                  {r.match === "data" || r.suggestion ? <Evidence row={r} /> : r.match ? (
                     <span title={METHOD_HINT[r.match]} className={r.match === "inferred" ? "text-info" : "text-muted"}>
                       {METHOD_LABEL[r.match]}
+                      <EvidenceNote row={r} />
                     </span>
                   ) : <span className="text-muted">—</span>}
                 </td>
@@ -162,12 +168,15 @@ function ComparisonTable({ comparison }: { comparison: Comparison }) {
   );
 }
 
-export function ColumnComparison({ comparisons, sourceLabel, transform }: {
+export function ColumnComparison({ comparisons, sourceLabel, transform, mappingId }: {
   comparisons: Comparison[];
   sourceLabel: string;
   transform: boolean;
+  /** with it, renamed columns can be checked on the data (see components/Renames) */
+  mappingId?: string;
 }) {
   const [tab, setTab] = useState(0);
+  const renames = useRenames(transform ? undefined : mappingId);
   const current = comparisons[Math.min(tab, comparisons.length - 1)];
   if (!current) return null;
 
@@ -195,7 +204,7 @@ export function ColumnComparison({ comparisons, sourceLabel, transform }: {
           This is a transform mapping: target columns may come from any of its sources, so pairing by name is a guide, not a verdict.
         </p>
       )}
-      <ComparisonTable key={current.target} comparison={current} />
+      <ComparisonTable key={current.target} comparison={current} renames={mappingId && !transform ? renames : undefined} />
     </Card>
   );
 }

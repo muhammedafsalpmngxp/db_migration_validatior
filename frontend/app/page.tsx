@@ -167,6 +167,13 @@ export default function Home() {
                     and columns cannot be read right now. Press Refresh in a moment.
                   </p>
                 )}
+                {sel.busy && (
+                  <p className="rounded-lg border border-info/30 bg-info-soft px-4 py-3 text-sm text-info">
+                    Another session is writing to this table right now. Its rows were counted directly and
+                    include rows not committed yet, so the count may still change; its size shows once the
+                    load has finished.
+                  </p>
+                )}
 
                 <AiSummary key={`ai|${result.mapping.id}`} mappingId={result.mapping.id} />
 
@@ -184,6 +191,7 @@ export default function Home() {
                     comparisons={result.comparisons}
                     sourceLabel={`${sel.schema}.${sel.table}`}
                     transform={result.mapping.type === "transform"}
+                    mappingId={result.mapping.id}
                   />
                 )}
               </div>

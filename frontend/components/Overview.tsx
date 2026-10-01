@@ -56,6 +56,13 @@ export function Overview({ scope, onSelect }: { scope: Scope; onSelect: (ref: st
             Their counts show once the load releases them; press Refresh.
           </p>
         )}
+        {(s.busy_tables?.length ?? 0) > 0 && (
+          <p className="mt-2 rounded-lg border border-info/30 bg-info-soft px-3 py-2 text-sm text-info">
+            Being written to right now: {s.busy_tables!.map((r) => r.split(".").slice(1).join(".")).join(", ")}.
+            Their rows were counted directly and include rows the load has not committed yet, so these counts
+            may still change; press Refresh once the load has finished.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">

@@ -196,6 +196,23 @@ Never sent: connection details, whole tables or rows, and values of email / phon
 is set. Settings in `backend/.env`: `LLM_PROVIDER=openai`, `OPENAI_API_KEY`, `OPENAI_MODEL`
 (optional `OPENAI_BASE_URL`, `AI_TIMEOUT`, `AI_MAX_OUTPUT_TOKENS`).
 
+### Renamed columns, checked on the data
+
+Names alone cannot tell `start_date`, `target_start` and `actual_start` apart, so a column
+left without a partner by the naming rules is matched by its data (**Find renamed columns by
+data** in the Column comparison card, `app/renames.py`). Rows are paired on a key proven
+unique on both sides, or on the columns that hold the same values on both sides; then every
+leftover source column is compared with every leftover target column that can hold the same
+kind of value, on **all** paired rows. A rename is **verified** only when 100% of the paired
+rows are identical (the data check's own rule), the column holds real values, at least half
+of the smaller table pairs up, and no other column matches as well. Rows on one side only
+(different row counts) do not count against a rename; they are reported beside it. Anything
+less - 99.99%, two equal matches, an empty or constant column - is listed for a person, with
+the differing rows and a ready `columns:` line for the mapping file. Pairs the name rules
+made are measured too, and shown when the data does not support them. Results are kept in
+`backend/.cache/rename_checks.json`; the data check, key mapping check and AI summary keep
+their own pairing.
+
 ### How columns are paired
 
 In order, each round over the columns still unpaired: declared in the mapping file
@@ -232,3 +249,10 @@ are guesses and are labelled as such; anything the rules cannot see
 
 Row counts come from `sys.partitions` (instant even for the 73 million row
 `ActivityTaskPlan`); the exact count is on demand because it reads the whole table.
+A session with an open transaction that writes to a table (a load) keeps that table's
+`sys.partitions` rows locked, though its rows stay readable. Such a table is then counted
+directly, read uncommitted, and shown as **loading**: the count includes rows the load has
+not committed yet, and its size is unknown until the load finishes
+(`MSSQL_BUSY_COUNT_TIMEOUT` / `MSSQL_BUSY_COUNT_BUDGET`). Only a table whose schema is
+held (truncate, index rebuild, alter) - which even an uncommitted read cannot pass - is
+shown as **locked**.
