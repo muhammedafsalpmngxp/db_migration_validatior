@@ -115,14 +115,14 @@ export function DataOverview({ mappings, data, onSelect }: {
               <span className="h-1.5 w-28 rounded-full bg-surface-2">
                 <span className="block h-1.5 rounded-full bg-accent" style={{ width: `${job!.total ? (job!.done * 100) / job!.total : 0}%` }} />
               </span>
-              {job!.done}/{job!.total} · {job!.current}
+              {job!.done}/{job!.total} · {job!.current}{job!.step ? ` · ${job!.step}` : ""}
             </span>
           ) : last ? (
             <span className="text-xs text-muted">last run {new Date(last).toLocaleString()}</span>
           ) : null}
           <button type="button" onClick={runAll} disabled={running}
             className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50 dark:text-bg"
-            title="Compare every value of every mapping, and check that every link points at the right row, in the background (a few minutes)">
+            title="Compare every value of every mapping, check that every link points at the right row, and find renamed columns by their data, in the background">
             {running ? "Checking…" : checked ? "Re-run all data checks" : "Run all data checks"}
           </button>
         </div>

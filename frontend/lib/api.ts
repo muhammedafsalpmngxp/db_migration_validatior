@@ -293,6 +293,8 @@ export type DataCheckJob = {
   done: number;
   total: number;
   current: string | null;
+  /** What the run is doing for the current mapping: data check, key mapping, renamed columns. */
+  step?: string | null;
   started_at: string | null;
   finished_at: string | null;
 };

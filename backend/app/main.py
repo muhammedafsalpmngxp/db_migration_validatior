@@ -381,12 +381,22 @@ def data_checks_run():
 
 
 def _run_all_checks(m):
+    _checks.job["step"] = "data check"
     result = _run_data_check(m)
+    _checks.put(result)   # saved now: the rename check below pairs rows on this check's key
+    _checks.job["step"] = "key mapping"
     try:
         _keymaps.put(_run_key_mapping(m))
     except Exception as exc:  # the data check result is still saved
         logger.error("key mapping check of %s failed: %s", m.id, exc)
         _keymaps.put(_failed_key_mapping(m, exc))
+    _checks.job["step"] = "renamed columns"
+    try:
+        from . import renames
+        live = _live_tables()
+        renames.check_now(m, lambda member: _entry(live, member.ref))
+    except Exception as exc:  # the data check and key mapping results are still saved
+        logger.error("rename check of %s failed: %s", m.id, exc)
     return result
 
 

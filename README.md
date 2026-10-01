@@ -209,7 +209,10 @@ of the smaller table pairs up, and no other column matches as well. Rows on one 
 (different row counts) do not count against a rename; they are reported beside it. Anything
 less - 99.99%, two equal matches, an empty or constant column - is listed for a person, with
 the differing rows and a ready `columns:` line for the mapping file. Pairs the name rules
-made are measured too, and shown when the data does not support them. Results are kept in
+made are measured too, and shown when the data does not support them. **Re-run all data checks**
+runs it too, for each mapping right after its data check (and on that check's key), so the
+column comparison already shows the verified renames; mappings over `RENAME_AUTO_MAX_ROWS`
+(default: the data check's own limit) are left for the button. Results are kept in
 `backend/.cache/rename_checks.json`; the data check, key mapping check and AI summary keep
 their own pairing.
 

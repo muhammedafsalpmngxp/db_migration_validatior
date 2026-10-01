@@ -61,9 +61,13 @@ POSSIBLE_MIN = float(_env("RENAME_POSSIBLE_MIN", "0.5"))    # below this share a
 BATCH = int(_env("RENAME_BATCH", "25"))                     # pairs measured in one query
 MAX_CANDIDATES = int(_env("RENAME_MAX_CANDIDATES", "3000"))
 TIMEOUT = int(_env("RENAME_TIMEOUT", "7200"))               # seconds one query may run
+# "Re-run all data checks" also checks renames, up to this many rows per mapping (sources
+# and targets together); bigger ones are left for the button. 0 = no limit.
+AUTO_MAX_ROWS = int(_env("RENAME_AUTO_MAX_ROWS", str(config.DATA_CHECK_MAX_ROWS)))
 RESULT_FILE = Path(_env("RENAME_FILE", config.BACKEND_DIR / ".cache" / "rename_checks.json"))
 LOG_FILE = Path(_env("RENAME_LOG_FILE", config.BACKEND_DIR / ".cache" / "renames.log"))
 EXAMPLES = 3
+HASH_RANGE = 1 << 24    # values of the first 3 bytes of an anchor hash, for sampling rows paired on columns
 CAND_BASE = 10_000      # candidate pair numbers start here, apart from the name pairs (0 ...)
 
 TARGET = config.TARGET_SIDE
@@ -405,7 +409,16 @@ def _paired_sql(p, side, key, anchors, sample, select, where_extra="", tail=""):
     hs = keymap._hash([(f"x.c{a.i}", a) for a in anchors])
     ht = keymap._hash([(f"y.t{a.i}", a) for a in anchors])
     where = " AND ".join(x for x in ("s.__n = 1 AND t.__n = 1", where_extra) if x)
-    return (f"""WITH s0 AS (SELECT x.*, {hs} AS __h FROM {src} x), t0 AS (SELECT y.*, {ht} AS __h FROM {tgt} y),
+    # A sample keeps the rows whose anchor hash falls in the lowest share of the hash range,
+    # about `sample` rows per side. Both sides keep the same hashes, so the kept rows pair
+    # exactly as they would among all rows: rows sharing a hash are kept or left out
+    # together, so "unique on both sides" is still decided on whole groups.
+    keep = ""
+    if sample:
+        cut = max(1, min(HASH_RANGE, -(-HASH_RANGE * int(sample) // max(1, p.source_rows, p.target_rows))))
+        keep = f" WHERE CAST(SUBSTRING(__h, 1, 3) AS int) < {cut}"
+    return (f"""WITH s0 AS (SELECT * FROM (SELECT x.*, {hs} AS __h FROM {src} x) q{keep}),
+                 t0 AS (SELECT * FROM (SELECT y.*, {ht} AS __h FROM {tgt} y) q{keep}),
                  s AS (SELECT s0.*, COUNT_BIG(*) OVER (PARTITION BY s0.__h) AS __n FROM s0),
                  t AS (SELECT t0.*, COUNT_BIG(*) OVER (PARTITION BY t0.__h) AS __n FROM t0)
               SELECT {select} FROM s INNER JOIN t ON s.__h = t.__h WHERE {where} {tail}""")
@@ -602,7 +615,7 @@ def _check_target(ctx, m, entry_of, tmember):
     log.add(f"Rows are paired on {how}.", mapping=m.id)
 
     # 2. On a big table, a sample rules out the pairs that differ at once.
-    big = max(p.source_rows, p.target_rows) > FULL_BELOW and key is not None
+    big = max(p.source_rows, p.target_rows) > FULL_BELOW
     sample_res = {}
     survivors = cands
     if big:
@@ -647,7 +660,8 @@ def _check_target(ctx, m, entry_of, tmember):
             near.append(max(mine, key=lambda cr: cr[1]["identical"] / cr[1]["paired"])[0])
     near += [x for x in named if full.get(x.i) and full[x.i]["identical"] < full[x.i]["paired"]]
     for x in near[:20]:
-        examples_of[x.i] = _examples(ctx, p, key, anchors, x, SAMPLE_ROWS if big else None)
+        # Rows paired on columns: examples come from all paired rows, as before.
+        examples_of[x.i] = _examples(ctx, p, key, anchors, x, SAMPLE_ROWS if big and key is not None else None)
 
     out["decisions"], out["named"] = _decide(m, p, how, key, anchors, named, cands, full, sample_res, examples_of,
                                              coverage, paired_rows)
@@ -737,6 +751,35 @@ def stale(result, mapping, entry_of):
         except Exception:
             return False
     return False
+
+
+def check_now(m, entry_of):
+    """The rename check of one mapping, run in the caller's thread and saved.
+
+    The data check run ("Re-run all data checks") calls this after each mapping's data
+    check, so its rows are paired on that fresh check's key and the column comparison shows
+    the verified renames without a click. Transform and excluded mappings have no columns
+    to match. A mapping over AUTO_MAX_ROWS is left for the button: noted, unless a finished
+    result is already saved. Returns the result, or None when nothing was checked."""
+    if m.type in ("transform", "excluded"):
+        return None
+    rows = sum(((entry_of(x) or {}).get("rows") or 0) for x in m.sources + m.targets)
+    if AUTO_MAX_ROWS and rows > AUTO_MAX_ROWS:
+        text = (f"Not checked automatically: {_fmt(rows)} rows in this mapping, over the {_fmt(AUTO_MAX_ROWS)} "
+                "row limit of the automatic run (RENAME_AUTO_MAX_ROWS). Press the button to check it; on this "
+                "many rows it can take a long time.")
+        log.add(text, "warn", mapping=m.id)
+        saved = store.get(m.id)
+        if not (saved and saved.get("status") == "done"):
+            store.put({"mapping": m.id, "type": m.type, "checked_at": _now(), "targets": [],
+                       "status": "skipped", "headline": text, "seconds": 0})
+        return None
+    log.add(f"Checking mapping {m.id} ({m.type}) after its data check.", mapping=m.id, step=True)
+    result = check(m, entry_of)
+    store.put(result)
+    log.add(f"{result['status']}: {result['headline']} ({result['seconds']} s)",
+            "ok" if result["status"] == "done" else "warn", mapping=m.id)
+    return result
 
 
 def start(mappings, entry_of_factory, refresh=False):
