@@ -6,6 +6,8 @@
     POST /api/report/cancel                 stop it; a partial report is still written
     GET  /api/report/list                   the saved reports
     POST /api/report/rebuild {run_id}       write a saved report's files again (no database read)
+    POST /api/report/reanalyse {run_id}     analyse a finished run again from what its checks measured
+                                            (catalogs and row counts read again; no table re-checked)
     GET  /api/report/download/{id}/{kind}   the Word (docx) or Excel (xlsx) file
 
 Starting, stopping and rebuilding read the shared servers or change files, so they are only
@@ -115,6 +117,17 @@ def rebuild(req: RebuildRequest, request: Request):
     if not any(r["run_id"] == req.run_id for r in jobs.reports()):
         raise HTTPException(status_code=404, detail="No such report.")
     return jobs.rebuild(req.run_id)
+
+
+@router.post("/reanalyse")
+def reanalyse(req: RebuildRequest, request: Request):
+    _require_local(request)
+    if not any(r["run_id"] == req.run_id for r in jobs.reports()):
+        raise HTTPException(status_code=404, detail="No such report.")
+    ok, message = jobs.reanalyse(req.run_id)
+    if not ok:
+        raise HTTPException(status_code=409, detail=message)
+    return jobs.status(0)
 
 
 @router.get("/download/{run_id}/{kind}")

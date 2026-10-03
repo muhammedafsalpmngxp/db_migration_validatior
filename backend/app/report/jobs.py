@@ -176,6 +176,53 @@ def _wait(seconds):
     _cancel.wait(seconds)
 
 
+# ---- a lost connection: wait for the server, then go on ------------------------------------------
+
+# ODBC SQLSTATEs of a lost or failed connection (not of a query or data problem).
+CONNECTION_STATES = ("08S01", "08001", "08004", "08007", "HYT01")
+RETRY_WAIT = 30     # seconds between two looks at a server that cannot be reached
+RETRY_ROUNDS = 3    # times a mapping whose check broke off on a lost connection is checked again
+
+
+def _lost_connection(result):
+    """Did this saved check fail because the connection was lost?"""
+    return bool(result) and result.get("status") == "error" and any(
+        st in str(result.get("headline") or "") for st in CONNECTION_STATES)
+
+
+def _wait_for_servers(stage, what):
+    """Wait, without a time limit, until both servers answer (the preflight's light checks),
+    looking every RETRY_WAIT seconds; the page says so. True when they answer, False when
+    the run is stopped meanwhile (the report then uses what was measured)."""
+    missing = []
+    while not _cancel.is_set():
+        pf = preflight()
+        now = [x["label"] for x in (pf["atnm"], pf["rds"]) if not x["ok"]]
+        if not now:
+            if missing:
+                log.add(f"{' and '.join(missing)} answers again: {what} goes on.", "ok", stage=stage)
+                _stage(stage, "running", waiting=None)
+            return True
+        if now != missing:
+            log.add(f"{what}: {' and '.join(now)} cannot be reached (VPN?). Waiting for it to come back; "
+                    "Stop finishes the report with what was measured.", "warn", stage=stage)
+            missing = now
+        _stage(stage, "running", waiting=f"Waiting for {' and '.join(now)} to come back (VPN?) - looking every "
+                                          f"{RETRY_WAIT} s. Stop finishes the report with what was measured.")
+        _wait(RETRY_WAIT)
+    return False
+
+
+def _mapping_lost(mapping_id, since):
+    """Did one of this run's checks of the mapping break off on a lost connection?"""
+    from .. import main, quality, renames
+    for res in (main._checks.get(mapping_id), main._keymaps.get(mapping_id), renames.store.get(mapping_id),
+                quality.store.get(mapping_id)):
+        if res and (res.get("checked_at") or "") >= since and _lost_connection(res):
+            return True
+    return False
+
+
 def _part1(resume, since):
     from ..ATNM import jobs as atnm_jobs
     from ..ATNM import required as atnm_required
@@ -263,11 +310,32 @@ def _part2(resume, since):
     if not mappings:
         _stage("part2", "done", fraction=1.0)
         return
+    if not _follow_part2(main, mappings, done_before, total):
+        return
+    log.add(f"Section 2 finished: {main._checks.job.get('done', 0)} mappings checked.", "ok", stage="part2")
+
+    # A check that broke off because the connection was lost is done again once the servers
+    # answer - the mapping only, a few rounds at most (a real failure is never retried).
+    for round_no in range(1, RETRY_ROUNDS + 1):
+        lost = [m for m in mappings if _mapping_lost(m.id, since)]
+        if not lost or _cancel.is_set():
+            break
+        log.add(f"Section 2: {len(lost)} mapping{'s' if len(lost) != 1 else ''} broke off on a lost connection "
+                f"({', '.join(m.id for m in lost)}); checking again (round {round_no} of {RETRY_ROUNDS}).",
+                "warn", stage="part2")
+        if not _wait_for_servers("part2", "Section 2") or not _follow_part2(main, lost, total - len(lost), total):
+            break
+    _stage("part2", "stopped" if _cancel.is_set() else "done", current=None, step=None, waiting=None, fraction=1.0)
+
+
+def _follow_part2(main, mappings, done_before, total):
+    """Run `mappings` through the RDS run ("Re-run all data checks") and mirror its progress.
+    False when the run was stopped before it could start."""
     while not main._checks.run_all(mappings, main._run_all_checks):
         _stage("part2", "running", waiting="Another RDS data check run is going; waiting for it.")
         _wait(5)
         if _cancel.is_set():
-            return
+            return False
     seen = None
     while True:
         j = dict(main._checks.job)
@@ -287,8 +355,7 @@ def _part2(resume, since):
             log.add("Stopping the RDS run after the mapping in progress.", "warn", stage="part2")
             main._checks.cancel()
         _wait(2)
-    log.add(f"Section 2 finished: {main._checks.job.get('done', 0)} mappings checked.", "ok", stage="part2")
-    _stage("part2", "stopped" if _cancel.is_set() else "done", current=None, step=None, waiting=None, fraction=1.0)
+    return True
 
 
 def _folder(run_id):
@@ -353,31 +420,7 @@ def _work(resume, expected):
         if stopped:
             run["mode"] = (run["mode"] or "") + " · stopped early: partial report"
             log.add("The run was stopped: the report shows what was checked; the rest is listed as not checked.", "warn")
-
-        _stage("collect", "running", step="Reading the catalogs and row counts again, and collecting every result.")
-        ev = collect.build(run, since)
-        _stage("collect", "done", step=None, note=f"{len(ev['issues'])} issues, {len(ev['not_checked'])} not checked")
-        log.add(f"Analysis: overall {ev['overall']}; {ev['totals']['issues'][plain.MUST_FIX]} must be fixed, "
-                f"{ev['totals']['issues'][plain.DECIDE]} need a decision, {len(ev['not_checked'])} not checked.",
-                "ok", stage="collect")
-
-        _stage("ai", "running", step="Writing the summary from the facts.")
-        ev["summary"] = synth.write(ev, note=lambda text, level="info": log.add(text, level, stage="ai"))
-        _stage("ai", "done", step=None, note="written by AI, checked" if ev["summary"]["source"] == "ai"
-               else f"plain sentences ({ev['summary'].get('why')})")
-
-        _stage("files", "running", step="Writing the Excel and Word files, then checking them.")
-        ev["run"]["finished_at"] = _now()
-        ev["log"] = log.all()
-        meta = _write_files(ev, job["run_id"])
-        if meta["self_check"]:
-            for p in meta["self_check"]:
-                log.add(f"Self-check: {p}", "error", stage="files")
-        _stage("files", "done", step=None, note="self-check passed" if not meta["self_check"]
-               else f"{len(meta['self_check'])} self-check problems")
-        _prune()
-        job["result"] = meta
-        log.add(f"Report ready: {meta['files']['docx']} and {meta['files']['xlsx']} ({ev['overall']}).", "ok")
+        _analyse(run, since)
     except _Failed as exc:
         job["error"] = str(exc)
         log.add(f"The report could not be made: {exc}", "error")
@@ -385,6 +428,80 @@ def _work(resume, expected):
             _stage(job["stage"], "failed")
     except Exception as exc:
         logger.exception("report run failed")
+        job["error"] = f"Unexpected error: {exc}"
+        log.add(job["error"], "error")
+        if job["stage"]:
+            _stage(job["stage"], "failed")
+    finally:
+        job.update(running=False, cancelling=False, finished_at=_now())
+        _write_run({"run_id": job["run_id"], "started_at": job["started_at"], "stage": job["stage"],
+                    "status": "failed" if job["error"] else "finished", "test": job.get("test")})
+
+
+def _analyse(run, since):
+    """The final count check, the analysis, the summary and the files of a run whose checks
+    are done. Waits for a lost server first (Stop: go on with what the run read)."""
+    _stage("collect", "running", step="Reading the catalogs and row counts again, and collecting every result.")
+    _wait_for_servers("collect", "The final count check")
+    ev = collect.build(run, since)
+    _stage("collect", "done", step=None, note=f"{len(ev['issues'])} issues, {len(ev['not_checked'])} not checked")
+    log.add(f"Analysis: overall {ev['overall']}; {ev['totals']['issues'][plain.MUST_FIX]} must be fixed, "
+            f"{ev['totals']['issues'][plain.DECIDE]} need a decision, {len(ev['not_checked'])} not checked.",
+            "ok", stage="collect")
+
+    _stage("ai", "running", step="Writing the summary from the facts.")
+    ev["summary"] = synth.write(ev, note=lambda text, level="info": log.add(text, level, stage="ai"))
+    _stage("ai", "done", step=None, note="written by AI, checked" if ev["summary"]["source"] == "ai"
+           else f"plain sentences ({ev['summary'].get('why')})")
+
+    _stage("files", "running", step="Writing the Excel and Word files, then checking them.")
+    ev["run"]["finished_at"] = _now()
+    ev["log"] = log.all()
+    meta = _write_files(ev, job["run_id"])
+    if meta["self_check"]:
+        for p in meta["self_check"]:
+            log.add(f"Self-check: {p}", "error", stage="files")
+    _stage("files", "done", step=None, note="self-check passed" if not meta["self_check"]
+           else f"{len(meta['self_check'])} self-check problems")
+    _prune()
+    job["result"] = meta
+    log.add(f"Report ready: {meta['files']['docx']} and {meta['files']['xlsx']} ({ev['overall']}).", "ok")
+
+
+AGAIN = " · analysed again"
+
+
+def reanalyse(run_id):
+    """'Analyse again': the analysis, summary and files of a finished run, from the results its
+    checks measured (kept by the ATNM and RDS checks) - no table is checked again. For a run
+    whose last step could not reach a server. Returns (started, message)."""
+    global job
+    with _lock:
+        if job["running"]:
+            return False, "A report is being made."
+        try:
+            old = json.loads((_folder(run_id) / "evidence.json").read_text(encoding="utf-8"))["run"]
+        except (OSError, ValueError, KeyError):
+            return False, "This report cannot be analysed again (its evidence is missing)."
+        run = {k: old.get(k) for k in ("id", "started_at", "mode", "expected_tables", "expected_mappings", "test")}
+        run["mode"] = (run["mode"] or "").replace(AGAIN, "") + AGAIN
+        job = _blank_job()
+        _cancel.clear()
+        log.clear()
+        job.update(running=True, run_id=run_id, started_at=run["started_at"], mode=run["mode"], test=run.get("test"))
+        _stage("preflight", "done", note="analyse again: no table is checked again")
+        _stage("part1", "skipped", note="measured in this run")
+        _stage("part2", "skipped", note="measured in this run")
+        log.add(f"Analysing run {run_id} again from the results its checks measured.", "ok")
+    threading.Thread(target=_reanalyse_work, args=(run,), daemon=True, name="report-again").start()
+    return True, "Started."
+
+
+def _reanalyse_work(run):
+    try:
+        _analyse(run, run["started_at"])
+    except Exception as exc:
+        logger.exception("analyse again failed")
         job["error"] = f"Unexpected error: {exc}"
         log.add(job["error"], "error")
         if job["stage"]:

@@ -90,6 +90,7 @@ def part1(since, test=None):
            "renames": [], "row_diffs": [], "identity": [], "databases": [], "errors": []}
     pairs = atnm_settings.PAIRS
     cats = atnm_api._read_all(pairs, refresh=True)
+    stale = _fall_back_to_run_catalogs(pairs, cats, since)
     for p in pairs:
         src_cat, tgt_cat = cats[(p.id, "source")], cats[(p.id, "target")]
         try:
@@ -114,12 +115,48 @@ def part1(since, test=None):
                 out["not_checked"].append(_nc(1, item, "Whole table", item["reason"],
                                               "Connect the VPN (ATNM) and generate the report again."))
             continue
+        for side, read_at in stale.get(p.id, []):
+            out["not_checked"].append({
+                "part": 1, "database": p.source_db if side == "source" else p.target_db, "item": "every table",
+                "what": "Final row count",
+                "reason": f"The {'ATNM' if side == 'source' else 'RDS'} server could not be reached at the end of the "
+                          f"run, so the table list read during the run ({_clock(read_at)}) is used; the results "
+                          "measured during the run are kept.",
+                "todo": "Analyse again with the VPN connected."})
         db["tables_source"] = sum(1 for t in view["tables"] if t["in_source"])
         db["not_required"] = sum(1 for t in view["tables"] if t["in_source"] and not t.get("required"))
         for t in view["tables"]:
             if t.get("required") and t["key"] in req:
                 _p1_table(out, p, src_label, tgt_label, t, src_cat, tgt_cat, since, structure, atnm_jobs)
     return out
+
+
+def _fall_back_to_run_catalogs(pairs, cats, since):
+    """A catalog that cannot be read now (VPN lost at the end of the run) is replaced by the
+    one this run read while checking (kept in memory by the ATNM catalog), so the measured
+    results are not thrown away. Only a read made at or after `since` is used. Returns
+    {pair id: [(side, read_at)]} of the catalogs replaced."""
+    from ..ATNM import catalog
+    from ..ATNM import settings as atnm_settings
+    try:
+        start = datetime.fromisoformat(since).timestamp()
+    except (TypeError, ValueError):
+        return {}
+    replaced = {}
+    for p in pairs:
+        for side, server, db in (("source", atnm_settings.SOURCE, p.source_db),
+                                 ("target", atnm_settings.TARGET, p.target_db)):
+            if "error" not in cats.get((p.id, side), {}):
+                continue
+            kept = catalog._cache.get((server.key, db.lower()))
+            if kept and kept.get("read_at", 0) >= start:
+                cats[(p.id, side)] = kept
+                replaced.setdefault(p.id, []).append((side, kept["read_at"]))
+    return replaced
+
+
+def _clock(epoch):
+    return datetime.fromtimestamp(epoch).strftime("%H:%M")
 
 
 def _p1_item(p, src_label, tgt_label, t, mapping):

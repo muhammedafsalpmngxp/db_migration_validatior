@@ -295,9 +295,14 @@ export function ReportPage() {
                       </td>
                       <td className="py-1.5 text-right">
                         {allowed && !running && (
-                          <button type="button" onClick={() => act(async () => { await reportApi.rebuild(r.run_id); loadList(); })}
-                            title="Write the files again from this run's results (no database is read)"
-                            className="text-xs text-muted hover:text-accent">Rebuild files</button>
+                          <span className="flex justify-end gap-3">
+                            <button type="button" onClick={() => act(() => reportApi.reanalyse(r.run_id))} disabled={acting}
+                              title="Analyse this run again from the results its checks measured: the final count check, analysis, summary and files are redone; no table is checked again. Use it when the VPN was lost at the end of a run."
+                              className="text-xs text-muted hover:text-accent disabled:opacity-50">Analyse again</button>
+                            <button type="button" onClick={() => act(async () => { await reportApi.rebuild(r.run_id); loadList(); })}
+                              title="Write the files again from this run's results (no database is read)"
+                              className="text-xs text-muted hover:text-accent">Rebuild files</button>
+                          </span>
                         )}
                       </td>
                     </tr>

@@ -95,5 +95,7 @@ export const reportApi = {
   cancel: () => post<ReportStatus>("/api/report/cancel", {}),
   list: () => call<{ reports: ReportMeta[] }>("/api/report/list"),
   rebuild: (run_id: string) => post<ReportMeta>("/api/report/rebuild", { run_id }),
+  /** analyse a finished run again from what its checks measured (no table is checked again) */
+  reanalyse: (run_id: string) => post<ReportStatus>("/api/report/reanalyse", { run_id }),
   download: (run_id: string, kind: "docx" | "xlsx") => `/api/report/download/${encodeURIComponent(run_id)}/${kind}`,
 };
