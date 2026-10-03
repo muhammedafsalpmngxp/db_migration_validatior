@@ -662,3 +662,9 @@ app.include_router(coverage_router)
 from .quality import router as quality_router  # noqa: E402
 
 app.include_router(quality_router)
+
+# ---- Report: one Word and one Excel file about the whole migration (app/report) ----------
+
+from .report.api import router as report_router  # noqa: E402
+
+app.include_router(report_router)

@@ -216,6 +216,35 @@ column comparison already shows the verified renames; mappings over `RENAME_AUTO
 `backend/.cache/rename_checks.json`; the data check, key mapping check and AI summary keep
 their own pairing.
 
+### Report: one Word and one Excel file (`app/report`, the Report tab)
+
+**Generate report** checks everything live and writes the result for readers who have not
+worked on the migration: Part 1, the ATNM copy of the required tables (the source tables of
+the plan); Part 2, every mapping (data check, key mapping, renames, target table checks);
+then the catalogs and row counts are read again (tables that changed meanwhile are marked),
+every result is graded by fixed rules (Must fix / Needs a decision / Not checked / Correct /
+By design), the AI writes the summaries from the facts only (every number and name it uses
+is checked; plain sentences otherwise) and both files are written and self-checked. Only
+results measured during the run count. It uses the app's own runs, so it is read-only and
+takes one table at a time with `RUN_PAUSE_SECONDS` between steps. Stop still writes a
+partial report; a run cut short by a restart can be resumed. Files are kept in
+`backend/.cache/reports/<run>/` with the evidence they were built from (*Rebuild files*
+writes them again without reading a database).
+
+Both files have the same two sections: **Section 1 · ATNM → RDS** (the copy) and **Section 2 ·
+RDS → AlTasnimBI** (the move into the new system). The Word report: cover, summary, then per
+section every table (or mapping) with its result, what must be fixed and what needs a
+decision. The Excel workbook: a one-page Summary, then the Section 1 sheets (blue tabs,
+`1. ATNM …`: Tables, Problems, then the details), the Section 2 sheets (green tabs, `2. RDS …`:
+Mappings, Problems, then the details) and the general sheets (grey).
+
+**Test mode** (`REPORT_TEST_TABLES=N`, `app/report/testmode.py`): to try the whole report
+safely, only the N smallest required tables with records (Part 1, taken in turn from each
+database pair) and the N smallest mappings (Part 2) are checked - picked from the catalogs'
+row counts, nothing counted. The page shows *TEST MODE* and *Generate test report*; the Word
+cover, the Excel summary, the AI summary and the file names (`_TEST`) are marked. Set it to
+`0` (and restart the backend) for the normal full report.
+
 ### What else is checked (keys, empty values, coverage)
 
 - **ATNM copy check, per table:** renamed columns are found by their data (rows paired on

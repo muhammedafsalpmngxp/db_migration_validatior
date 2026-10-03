@@ -978,6 +978,14 @@ class Store:
             out[mid] = s
         return out
 
+    def cancel(self):
+        """Stop the background run after the mapping in progress. False when none runs."""
+        with self.lock:
+            if not self.job.get("running"):
+                return False
+            self.job["cancelling"] = True
+            return True
+
     def run_all(self, mappings, run_one):
         with self.lock:
             if self.job["running"]:
@@ -988,6 +996,8 @@ class Store:
         def work():
             try:
                 for m in mappings:
+                    if self.job.get("cancelling"):
+                        break
                     self.job["current"] = m.id
                     try:
                         self.put(run_one(m))
@@ -998,8 +1008,8 @@ class Store:
                                   "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
                     self.job["done"] += 1
             finally:
-                self.job.update(running=False, current=None,
-                                finished_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+                self.job.update(running=False, current=None, cancelled=bool(self.job.get("cancelling")),
+                                cancelling=False, finished_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
 
         threading.Thread(target=work, daemon=True, name="data-check").start()
         return True
