@@ -40,8 +40,47 @@ export type ColumnSummary = {
   missing: string[];
   extra: string[];
   changed: { name: string; notes: string[]; severity: Level }[];
+  /** columns renamed in RDS, verified by their data (identical on every paired row) */
+  renamed?: { source: string; target: string; notes: string[]; severity: Level }[];
   severity: Level;
 };
+
+/** One key or rule (primary / unique / foreign key, default value, check rule) ATNM vs RDS. */
+export type ConstraintRow = {
+  kind: "primary key" | "unique key" | "foreign key" | "default value" | "check rule";
+  what: string;
+  status: "same" | "missing" | "changed" | "extra";
+  severity: Level;
+  note: string;
+};
+
+export type ConstraintSummary = {
+  total: number;
+  same: number;
+  missing: number;
+  changed: number;
+  extra: number;
+  severity: Level;
+  rows: ConstraintRow[];
+};
+
+/** A column only one table has, matched with one only the other has, by its data. */
+export type RenameFound = {
+  source: string;
+  target: string;
+  source_type: string;
+  target_type: string;
+  paired: number;
+  identical: number;
+  differing: number;
+  filled: number;
+  rate: number;
+  coverage: number;
+  verdict: "verified" | "possible" | "ambiguous";
+  reason: string;
+};
+
+export type EmptyCount = { nulls: number; blanks: number | null };
 
 export type TableRow = {
   key: string;
@@ -52,7 +91,9 @@ export type TableRow = {
   rows: { source: number | null; target: number | null; exact: boolean; metadata_source?: number; metadata_target?: number };
   columns: ColumnSummary | null;
   row_key: { kind: string; columns: string[] } | null;
-  checks: { table: Level; columns: Level; rows: Level; data: Level };
+  checks: { table: Level; columns: Level; rows: Level; data: Level; constraints?: Level };
+  /** keys and rules compared (null: could not be read; absent: older backend) */
+  constraints?: ConstraintSummary | null;
   data: {
     status: DataStatus;
     headline: string;
@@ -175,7 +216,7 @@ export type ColumnCompare = {
   name: string;
   source: ColumnDef | null;
   target: ColumnDef | null;
-  status: "same" | "missing" | "extra" | "changed";
+  status: "same" | "missing" | "extra" | "changed" | "renamed";
   severity: Level;
   notes: string[];
 };
@@ -211,6 +252,10 @@ export type DataResult = {
     only_in_target_rows?: Record<string, string | null>[];
   };
   findings: { severity: "ok" | "info" | "review" | "problem" | "error"; text: string }[];
+  renames?: RenameFound[];
+  renames_note?: string | null;
+  /** NULL and blank values of every column on both servers */
+  profile?: { rows: { source: number; target: number }; columns: { name: string; source: EmptyCount | null; target: EmptyCount | null }[] };
 };
 
 export type TableDetail = {

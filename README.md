@@ -216,6 +216,32 @@ column comparison already shows the verified renames; mappings over `RENAME_AUTO
 `backend/.cache/rename_checks.json`; the data check, key mapping check and AI summary keep
 their own pairing.
 
+### What else is checked (keys, empty values, coverage)
+
+- **ATNM copy check, per table:** renamed columns are found by their data (rows paired on
+  the row key, the RDS rename rules: identical on every paired row) and then compared like
+  any other column; NULL and blank counts of every column on both servers; and the keys and
+  rules a copy should keep - primary key, unique keys, foreign keys, default values and
+  check rules - matched on what they cover, not their names. A lost primary key is a
+  problem; a lost unique key, foreign key, default or check rule is for review.
+- **Target table checks** (`app/quality.py`, card on each mapping, and part of *Re-run all
+  data checks*): does the target table have a primary key (and did the source), how many
+  rows repeat another row exactly (with no primary key; identity columns left out) next to
+  the source, and every foreign key in both directions - disabled, not trusted, and rows
+  pointing at a row that does not exist.
+- **Coverage** (`app/coverage.py`, card on the overview): every table of each database that
+  no mapping mentions. `COVERAGE_IGNORE` leaves out tables by pattern (e.g. `dbo.awsdms_*`).
+- **Identity counters** (both stages): the next number a new row would get is compared with
+  the highest one already used - a counter left behind by the copy makes every new insert
+  fail after go-live.
+- **Large text / JSON / binary columns** (`text`, `ntext`, `xml`, `image`) are compared by a
+  hash of their whole content, row by row on the data check's key (else as a set of values).
+- **One heavy step at a time** (`app/runguard.py`): the background runs take turns, one table
+  or mapping each, with `RUN_PAUSE_SECONDS` between steps, so the shared servers stay usable.
+- Decision rules are tested without a database: `cd backend && python -m pytest tests -q`.
+- The data check also keeps the columns it could not compare (`not_compared`, e.g. xml)
+  and the source columns with no target column (`unpaired_source`).
+
 ### How columns are paired
 
 In order, each round over the columns still unpaired: declared in the mapping file

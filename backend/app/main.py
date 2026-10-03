@@ -381,6 +381,15 @@ def data_checks_run():
 
 
 def _run_all_checks(m):
+    from . import runguard
+
+    def waiting(who):
+        _checks.job["step"] = f"waiting for {who}"
+    with runguard.slot(f"the RDS data check run ({m.id})", on_wait=waiting):
+        return _run_all_checks_now(m)
+
+
+def _run_all_checks_now(m):
     _checks.job["step"] = "data check"
     result = _run_data_check(m)
     _checks.put(result)   # saved now: the rename check below pairs rows on this check's key
@@ -397,6 +406,13 @@ def _run_all_checks(m):
         renames.check_now(m, lambda member: _entry(live, member.ref))
     except Exception as exc:  # the data check and key mapping results are still saved
         logger.error("rename check of %s failed: %s", m.id, exc)
+    _checks.job["step"] = "target table checks"
+    try:
+        from . import quality
+        live = _live_tables()
+        quality.check_now(m, lambda member: _entry(live, member.ref))
+    except Exception as exc:  # the other results are still saved
+        logger.error("target table checks of %s failed: %s", m.id, exc)
     return result
 
 
@@ -633,3 +649,16 @@ app.include_router(atnm_router)
 from .renames import router as renames_router  # noqa: E402
 
 app.include_router(renames_router)
+
+# ---- Coverage: tables no mapping mentions (app/coverage.py) -------------------------------
+
+from .coverage import router as coverage_router  # noqa: E402
+
+app.include_router(coverage_router)
+
+
+# ---- Target table checks: keys, duplicates, orphans (app/quality.py) ----------------------
+
+from .quality import router as quality_router  # noqa: E402
+
+app.include_router(quality_router)

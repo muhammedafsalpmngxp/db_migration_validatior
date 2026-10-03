@@ -178,6 +178,7 @@ function Checks({ t }: { t: TableRow }) {
     { label: "Columns", level: t.checks.columns },
     { label: "Rows", level: t.checks.rows },
     { label: "Values", level: t.checks.data },
+    ...(t.checks.constraints ? [{ label: "Keys", level: t.checks.constraints }] : []),
   ];
   return (
     <span className="hidden shrink-0 items-center gap-2.5 text-[11px] text-muted md:flex">

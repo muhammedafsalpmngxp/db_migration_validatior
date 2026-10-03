@@ -158,6 +158,8 @@ def table(pair: str = Query(..., description="Pair id, e.g. 1"),
     saved = jobs.store.get(p.id, key)
     view = structure.table_view(key, s, t, saved, options.cutoff(p, key), _live(p, key))
     columns = structure.compare_columns(s["columns"] if s else [], t["columns"] if t else [])
+    if view.get("data") and not view["data"]["stale"]:
+        columns = structure.apply_renames(columns, saved)
     return {"pair": p.public(), "table": view, "columns": columns, "data": saved,
             "job": jobs.status()}
 

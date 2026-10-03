@@ -402,6 +402,128 @@ def _keyed(side, key):
     return rows, columns, missing_by_source, missing_examples, extra_examples
 
 
+# ---- large values (text, ntext, xml, image) ------------------------------------------------------
+
+# Compared by a hash of their whole content, since they cannot be compared directly: text,
+# ntext and xml as Unicode text, image as bytes. Other types the data check cannot compare
+# (timestamp, geography ...) stay "not compared".
+LARGE_TEXT = {"text", "ntext", "xml"}
+LARGE_BINARY = {"image"}
+
+
+def _large_kind(p):
+    """'text' or 'binary' when the pair can be compared by content hash, else None."""
+    s, t = _bt(p["source"]["type"]), _bt(p["target"]["type"])
+    if not ({s, t} & (LARGE_TEXT | LARGE_BINARY)):
+        return None
+    if s in LARGE_TEXT | TEXT and t in LARGE_TEXT | TEXT:
+        return "text"
+    if s in LARGE_BINARY | BINARY and t in LARGE_BINARY | BINARY:
+        return "binary"
+    return None
+
+
+def _large_hash(expr, kind):
+    if kind == "binary":
+        return f"HASHBYTES('SHA2_256', CAST({expr} AS varbinary(max)))"
+    return f"HASHBYTES('SHA2_256', CONVERT(nvarchar(max), {expr}))"
+
+
+def _large_values(prep, key):
+    """Each large column pair, compared by the hash of its content: row by row on the data
+    check's key (identical / different / lost / added), or else as a whole multiset of
+    values. Only hashes are read - never the content."""
+    pairs = [(r, _large_kind(r)) for r in prep.rows if r["source"] and r["target"] and r not in prep.comparable]
+    pairs = [(r, k) for r, k in pairs if k]
+    out = []
+    if not pairs:
+        return out
+    tmember, tentry, _ = prep.side.target
+
+    def source_branches(with_key):
+        branches = []
+        for member, entry, cols in prep.side.sources:
+            parts = []
+            if with_key:
+                kc = cols.get(key.source["name"].lower())
+                parts.append(f"{key.source_value('x.' + _q(kc['name']), kc['type'])} AS __k" if kc
+                             else "CAST(NULL AS int) AS __k")
+            for n, (r, kind) in enumerate(pairs):
+                c = cols.get(r["source"]["name"].lower())
+                parts.append(f"{_large_hash('x.' + _q(c['name']), kind)} AS h{n}" if c
+                             else f"CAST(NULL AS varbinary(32)) AS h{n}")
+            branches.append(f"SELECT {', '.join(parts)} FROM {_full(member.ref.side, entry['schema'], entry['table'])} x")
+        return " UNION ALL ".join(branches)
+
+    def target_select(with_key):
+        parts = [f"{key.target_value()} AS __k"] if with_key else []
+        parts += [f"{_large_hash('y.' + _q(r['target']['name']), kind)} AS h{n}" for n, (r, kind) in enumerate(pairs)]
+        return f"SELECT {', '.join(parts)} FROM {_full(config.TARGET_SIDE, tentry['schema'], tentry['table'])} y"
+
+    if key is not None:
+        base = f"WITH s AS ({source_branches(True)}), t AS ({target_select(True)})"
+        sums = []
+        for n in range(len(pairs)):
+            s, t = f"s.h{n}", f"t.h{n}"
+            sums += [f"SUM(CASE WHEN ({s} IS NULL AND {t} IS NULL) OR {s} = {t} THEN 1 ELSE 0 END) AS e{n}",
+                     f"SUM(CASE WHEN {s} IS NOT NULL AND {t} IS NOT NULL AND {s} <> {t} THEN 1 ELSE 0 END) AS d{n}",
+                     f"SUM(CASE WHEN {s} IS NOT NULL AND {t} IS NULL THEN 1 ELSE 0 END) AS l{n}",
+                     f"SUM(CASE WHEN {s} IS NULL AND {t} IS NOT NULL THEN 1 ELSE 0 END) AS a{n}"]
+        r = _one(f"{base} SELECT COUNT_BIG(*) AS matched, {', '.join(sums)} FROM s JOIN t ON s.__k = t.__k")
+        for n, (row, kind) in enumerate(pairs):
+            res = {"identical": _n(r[f"e{n}"]), "different": _n(r[f"d{n}"]), "lost": _n(r[f"l{n}"]),
+                   "added": _n(r[f"a{n}"]), "rows_compared": _n(r["matched"])}
+            res["examples"] = [x["k"] for x in _run(
+                f"{base} SELECT TOP {EXAMPLES} CONVERT(nvarchar(200), s.__k) AS k FROM s JOIN t ON s.__k = t.__k "
+                f"WHERE s.h{n} <> t.h{n} OR (s.h{n} IS NULL AND t.h{n} IS NOT NULL) "
+                f"OR (s.h{n} IS NOT NULL AND t.h{n} IS NULL) ORDER BY s.__k")] if (
+                res["different"] or res["lost"] or res["added"]) else []
+            out.append({"source": row["source"]["name"], "target": row["target"]["name"], "stype": row["source"]["type"],
+                        "ttype": row["target"]["type"], "method": "key", **res})
+    else:
+        for n, (row, kind) in enumerate(pairs):
+            src = f"SELECT h{n} AS h FROM ({source_branches(False)}) q"
+            tgt = f"SELECT h{n} AS h FROM ({target_select(False)}) q"
+            r = _one(f"""
+              WITH s AS (SELECT ISNULL(h, 0x00) AS h, COUNT_BIG(*) AS n FROM ({src}) a GROUP BY ISNULL(h, 0x00)),
+                   t AS (SELECT ISNULL(h, 0x00) AS h, COUNT_BIG(*) AS n FROM ({tgt}) b GROUP BY ISNULL(h, 0x00))
+              SELECT SUM(CASE WHEN ISNULL(s.n, 0) < ISNULL(t.n, 0) THEN ISNULL(s.n, 0) ELSE ISNULL(t.n, 0) END) AS same,
+                     SUM(CASE WHEN ISNULL(s.n, 0) > ISNULL(t.n, 0) THEN s.n - ISNULL(t.n, 0) ELSE 0 END) AS only_s,
+                     SUM(CASE WHEN ISNULL(t.n, 0) > ISNULL(s.n, 0) THEN t.n - ISNULL(s.n, 0) ELSE 0 END) AS only_t
+              FROM s FULL OUTER JOIN t ON s.h = t.h""")
+            out.append({"source": row["source"]["name"], "target": row["target"]["name"], "stype": row["source"]["type"],
+                        "ttype": row["target"]["type"], "method": "values", "identical": _n(r["same"]),
+                        "only_in_source": _n(r["only_s"]), "only_in_target": _n(r["only_t"])})
+    for c in out:
+        bad = c.get("different", 0) + c.get("lost", 0) + c.get("only_in_source", 0) + c.get("only_in_target", 0)
+        c["verdict"] = "problem" if bad else ("review" if c.get("added") else "identical")
+    return out
+
+
+def _large_findings(large):
+    """Findings for the large columns, in the data check's words."""
+    out = []
+    for c in large:
+        label = c["source"] if c["source"] == c["target"] else f"{c['source']} → {c['target']}"
+        if c["method"] == "key":
+            if c["different"] or c["lost"]:
+                ex = f" (e.g. key {', '.join(c['examples'])})" if c["examples"] else ""
+                out.append(("error", f"{label} ({c['stype']}): content differs in {_fmt(c['different'])} rows and is "
+                                     f"lost in {_fmt(c['lost'])}{ex}; compared by a hash of the whole value."))
+            elif c["added"]:
+                out.append(("review", f"{label} ({c['stype']}): filled in {_fmt(c['added'])} target rows where the "
+                                      "source is empty."))
+        elif c["only_in_source"] or c["only_in_target"]:
+            out.append(("error", f"{label} ({c['stype']}): {_fmt(c['only_in_source'])} source values have no identical "
+                                 f"value in the target; compared by a hash of the whole value."))
+    same = [c for c in large if c["verdict"] == "identical"]
+    if same:
+        out.append(("info", f"{len(same)} large column{'s' if len(same) != 1 else ''} "
+                            f"({', '.join(c['source'] for c in same[:6])}{' …' if len(same) > 6 else ''}) "
+                            "identical on every row, compared by a hash of the whole value."))
+    return out
+
+
 # ---- keyless comparison ------------------------------------------------------------------------
 
 def _fingerprint(side, pairs=None):
@@ -721,6 +843,14 @@ def _check(m, entry_of):
         columns.append(c)
     result["columns"] = columns
 
+    # Large columns (text, ntext, xml, image): compared by content hash, then no longer
+    # listed as "not compared".
+    large = _large_values(prep, key)
+    result["large_columns"] = large
+    findings += [{"severity": s, "text": t} for s, t in _large_findings(large)]
+    compared_large = {c["source"].lower() for c in large}
+    not_compared = [x for x in not_compared if x.split(" (")[0].lower() not in compared_large]
+
     # Row-level findings, most important first.
     r = result["rows"]
     top = []
@@ -782,6 +912,13 @@ def _check(m, entry_of):
         "target": [{"column": c["name"], "type": c["type"], **tnulls[c["name"].lower()]} for c in tcols],
         "source_rows": source_rows, "target_rows": target_rows,
     }
+    # What was left out, so a report can list it: paired columns whose type cannot be
+    # compared, and source columns with no target column.
+    result["not_compared"] = [{"column": r["source"]["name"], "type": r["source"]["type"],
+                               "target": r["target"]["name"], "reason": "type cannot be compared"}
+                              for r in rows if r["source"] and r["target"] and r not in comparable
+                              and r["source"]["name"].lower() not in compared_large]
+    result["unpaired_source"] = unpaired
 
     errors = sum(1 for f in result["findings"] if f["severity"] == "error")
     reviews = sum(1 for f in result["findings"] if f["severity"] == "review")

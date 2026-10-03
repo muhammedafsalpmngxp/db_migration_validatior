@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 
 import pyodbc
 
+from .. import identity
 from ..values import HIDDEN, is_sensitive
 from . import conn, settings, structure
 
@@ -114,6 +115,19 @@ class Column:
         ws, wt = _width(self.source), _width(self.target)
         self.lob = ws is None or wt is None
         self.width = None if self.lob else max(ws, wt)
+
+
+class _OneColumn:
+    """A column only one of the two tables has (a rename candidate): its own text width."""
+
+    def __init__(self, col):
+        self.name = col["name"]
+        w = _width(col)
+        self.lob = w is None
+        self.width = w
+
+
+BLANKABLE = {"char", "varchar", "nchar", "nvarchar"}
 
 
 def _chunks(columns, idxs=None):
@@ -256,6 +270,27 @@ class Side:
             parts.append(f"{self.d.hash(self.v(i), self.columns[i].lob)} AS x{i}")
         marks = ", ".join("?" for _ in range(n))
         return f"SELECT {', '.join(parts)} FROM {self.table} x WHERE {self.k} IN ({marks})"
+
+    def profile_sql(self):
+        """Rows, and NULL (and, for text, blank) values of every column of this side's table."""
+        parts = ["COUNT_BIG(*) AS __rows"]
+        for i, c in enumerate(self.entry["columns"]):
+            col = f"x.{_q(c['name'])}"
+            parts.append(f"SUM(CASE WHEN {col} IS NULL THEN 1 ELSE 0 END) AS n{i}")
+            if c["base"] in BLANKABLE:
+                parts.append(f"SUM(CASE WHEN {col} IS NOT NULL AND LTRIM(RTRIM({col})) = N'' THEN 1 ELSE 0 END) AS b{i}")
+        return f"SELECT {', '.join(parts)} FROM {self.table} x"
+
+    def pairing_sql(self, only):
+        """For every row: what pairs it with its copy (the key, or else the shared columns),
+        and a hash and a filled flag of each column in `only` (columns this side alone has)."""
+        p = self.d.hash(self.k) if self.key_idx else self.h
+        parts = [f"{p} AS p"]
+        for i, c in enumerate(only):
+            one = _OneColumn(c)
+            parts.append(f"CAST(SUBSTRING({self.d.hash(self.d.value(c, one), one.lob)}, 1, 8) AS bigint) AS v{i}")
+            parts.append(f"CASE WHEN x.{_q(c['name'])} IS NULL THEN 0 ELSE 1 END AS f{i}")
+        return f"SELECT {', '.join(parts)} FROM {self.table} x"
 
     def values_by_hash_sql(self, n):
         parts = [f"LEFT({self.v(i)}, {VALUE_CHARS}) AS v{i}" for i in range(len(self.cols))]
@@ -476,10 +511,34 @@ def _check(pair, src_entry, tgt_entry, rows, src_info, tgt_info, ctx, cutoff=Non
            "columns_only_in_source": [r["name"] for r in rows if r["source"] and not r["target"]],
            "columns_only_in_target": [r["name"] for r in rows if r["target"] and not r["source"]]}
 
+    # Columns only one table has: maybe the same column under a new name (decided by the data).
+    s_only = [r["source"] for r in rows if r["source"] and not r["target"] and r["source"]["base"] not in SKIP_TYPES]
+    t_only = [r["target"] for r in rows if r["target"] and not r["source"] and r["target"]["base"] not in SKIP_TYPES]
+
     ctx.note(f"Connecting to {settings.SOURCE.label} ({pair.source_db}) and {settings.TARGET.label} ({pair.target_db}).",
              step=True)
     with _Runner(src, tgt, ctx) as run:
-        key_text = f" Rows are identified by {', '.join(r['name'] for r in key_rows)}." if key_rows else ""
+        if s_only and t_only:
+            out["renames"], out["renames_note"] = _find_renames(run, src, tgt, s_only, t_only)
+            verified = [r for r in out["renames"] if r["verdict"] == "verified"]
+            if verified:
+                # A verified rename is compared like any shared column from here on.
+                by_s = {c["name"]: c for c in s_only}
+                by_t = {c["name"]: c for c in t_only}
+                for r in verified:
+                    row = {"name": f"{r['source']} → {r['target']}", "source": by_s[r["source"]], "target": by_t[r["target"]]}
+                    shared.append(row)
+                    columns.append(Column(row))
+                    src.cols.append(row["source"])
+                    tgt.cols.append(row["target"])
+                src.chunks = _chunks(columns)
+                tgt.chunks = _chunks(columns)
+                renamed_s = {r["source"] for r in verified}
+                renamed_t = {r["target"] for r in verified}
+                out["columns_only_in_source"] = [n for n in out["columns_only_in_source"] if n not in renamed_s]
+                out["columns_only_in_target"] = [n for n in out["columns_only_in_target"] if n not in renamed_t]
+                out["compared_columns"] = len(shared)
+        key_text =f" Rows are identified by {', '.join(r['name'] for r in key_rows)}." if key_rows else ""
         ctx.note(f"Step 1 of 3 · Fingerprinting every row on both servers: about {_fmt(src_entry['rows'])} rows in "
                  f"{settings.SOURCE.label} and {_fmt(tgt_entry['rows'])} in {settings.TARGET.label}, "
                  f"{len(shared)} columns each.{key_text}", step=True)
@@ -498,7 +557,25 @@ def _check(pair, src_entry, tgt_entry, rows, src_info, tgt_info, ctx, cutoff=Non
             ctx.note("The fingerprints are equal: every value of every row is identical.", "ok")
         else:
             ctx.note("The fingerprints differ: the tables are not identical. Looking for what differs.", "warn")
+        out["profile"] = _profile(run, src, tgt)
+        out["identity"] = _identity(run, tgt)
         findings = []
+        for r in out.get("renames") or []:
+            if r["verdict"] == "verified":
+                findings.append({"severity": "info", "text": f"{r['source']} was renamed to {r['target']}: identical on all "
+                                                             f"{_fmt(r['paired'])} paired rows, so it is compared as one column."})
+            else:
+                findings.append({"severity": "review", "text": f"Possible rename {r['source']} → {r['target']}, not "
+                                                               f"confirmed: {r['reason']}."})
+        if out.get("renames_note"):
+            findings.append({"severity": "info", "text": out["renames_note"]})
+        for s in out["identity"]:
+            if s["behind"]:
+                findings.append({"severity": "problem", "text": identity.text(f"{settings.TARGET.label} "
+                                                                              f"{tgt.entry['schema']}.{tgt.entry['table']}", s)})
+        empty = _mostly_empty(out["profile"])
+        if empty:
+            findings.append({"severity": "info", "text": empty})
         if out["columns_only_in_source"] or out["columns_only_in_target"]:
             findings.append({"severity": "info", "text": f"Compared on the {len(shared)} columns both tables have; "
                                                          "the others are listed under Columns."})
@@ -549,6 +626,148 @@ def _check(pair, src_entry, tgt_entry, rows, src_info, tgt_info, ctx, cutoff=Non
                                                      "row counts above are a minimum."})
     out["findings"] = findings
     return out
+
+
+def _profile(run, src, tgt):
+    """NULL and blank values of every column on both servers (one read of each table)."""
+    run.ctx.note("Counting the empty values (NULL and blank) of every column on both servers.", step=True)
+    a, b = run.both(lambda s: s.profile_sql(), what="counting empty values")
+    a, b = a[0], b[0]
+
+    def per(side, r):
+        out = {}
+        for i, c in enumerate(side.entry["columns"]):
+            out[c["name"].lower()] = (c["name"], {"nulls": int(r[f"n{i}"] or 0),
+                                                  "blanks": int(r[f"b{i}"] or 0) if f"b{i}" in r else None})
+        return out
+
+    ps, pt = per(src, a), per(tgt, b)
+    columns = []
+    for k, (name, v) in ps.items():
+        columns.append({"name": name, "source": v, "target": pt[k][1] if k in pt else None})
+    for k, (name, v) in pt.items():
+        if k not in ps:
+            columns.append({"name": name, "source": None, "target": v})
+    return {"rows": {"source": int(a["__rows"] or 0), "target": int(b["__rows"] or 0)}, "columns": columns}
+
+
+def _identity(run, side):
+    """The identity counter of each identity column of the RDS copy (app/identity.py)."""
+    out = []
+    for c in side.entry["columns"]:
+        if not c.get("identity"):
+            continue
+        sql, params = identity.query(side.entry["schema"], side.entry["table"], c["name"])
+        rows = run.one(side, sql, params)
+        if rows:
+            out.append(identity.state(c["name"], rows[0]))
+    return out
+
+
+def _mostly_empty(profile, share=0.9, min_rows=100):
+    """The RDS columns that are at least 90% empty (the rule the RDS data check uses too)."""
+    n = profile["rows"]["target"]
+    if n < min_rows:
+        return None
+    heavy = [c["name"] for c in profile["columns"]
+             if c["target"] and c["target"]["nulls"] + (c["target"]["blanks"] or 0) >= share * n]
+    if not heavy:
+        return None
+    total = sum(1 for c in profile["columns"] if c["target"])
+    return (f"{len(heavy)} of {total} RDS columns are at least {share:.0%} empty: {', '.join(heavy[:8])}"
+            f"{' …' if len(heavy) > 8 else ''}.")
+
+
+def _find_renames(run, src, tgt, s_only, t_only):
+    """Pair columns only ATNM has with columns only RDS has, by their data.
+
+    Rows are paired on the row key (else on the columns both tables share, where that
+    combination is unique on both sides); only keys, value hashes and filled flags are
+    read. A pair is `verified` under the RDS rename check's rules: identical on every
+    paired row, at least RENAME_MIN_VALUES filled values (half the paired rows on a small
+    table), more than one value, at least RENAME_MIN_COVERAGE of the smaller table paired,
+    and no other column matching as well. Anything less that is identical on at least
+    RENAME_POSSIBLE_MIN of the rows is `possible` (or `ambiguous`): a person decides.
+    Returns (decisions, note)."""
+    n_rows = max(src.entry["rows"], tgt.entry["rows"])
+    if n_rows > settings.DIFF_ROWS_MAX:
+        note = (f"Columns only one table has were not checked for renames: {_fmt(n_rows)} rows, over "
+                f"ATNM_DIFF_ROWS_MAX ({_fmt(settings.DIFF_ROWS_MAX)}).")
+        run.ctx.note(note, "warn")
+        return [], note
+    how = "the row key" if src.key_idx else "the columns both tables share"
+    run.ctx.note(f"Looking for renamed columns: {len(s_only)} column{'s' if len(s_only) != 1 else ''} only in "
+                 f"{settings.SOURCE.label}, {len(t_only)} only in {settings.TARGET.label}; rows paired on {how}.", step=True)
+    rs, rt = run.both(lambda s: s.pairing_sql(s_only if s is src else t_only), what="reading the rename candidates")
+
+    def index(rows):
+        out, dup = {}, set()
+        for r in rows:
+            if r["p"] in out:
+                dup.add(r["p"])
+            else:
+                out[r["p"]] = r
+        for p in dup:
+            out.pop(p, None)
+        return out
+
+    S, T = index(rs), index(rt)
+    paired = [p for p in S if p in T]
+    n = len(paired)
+    if not n:
+        note = f"Columns only one table has could not be checked for renames: no row pairs up on {how}."
+        run.ctx.note(note, "warn")
+        return [], note
+    smaller = min(len(rs), len(rt))
+    coverage = n / smaller if smaller else 0.0
+    needed = min(settings.RENAME_MIN_VALUES, max(1, n // 2))
+    tv = [([T[p][f"v{j}"] for p in paired], [T[p][f"f{j}"] for p in paired]) for j in range(len(t_only))]
+    cands = []
+    for i, sc in enumerate(s_only):
+        sv, sf = [S[p][f"v{i}"] for p in paired], [S[p][f"f{i}"] for p in paired]
+        filled = sum(sf)
+        if not filled:
+            continue                                   # an empty column says nothing
+        distinct = len({v for v, f in zip(sv, sf) if f})
+        for j, (vals, flags) in enumerate(tv):
+            identical = sum(1 for a, b in zip(sv, vals) if a == b)
+            both_empty = sum(1 for a, b in zip(sf, flags) if not a and not b)
+            nonempty = n - both_empty
+            rate = (identical - both_empty) / nonempty if nonempty else 0.0
+            cands.append({"i": i, "j": j, "full": identical == n, "rate": rate, "identical": identical,
+                          "filled": filled, "distinct": distinct})
+    full_s = Counter(c["i"] for c in cands if c["full"])
+    full_t = Counter(c["j"] for c in cands if c["full"])
+    out, taken_s, taken_t = [], set(), set()
+    for c in sorted(cands, key=lambda c: (not c["full"], -c["rate"])):
+        if c["i"] in taken_s or c["j"] in taken_t:
+            continue
+        if not c["full"] and c["rate"] < settings.RENAME_POSSIBLE_MIN:
+            continue
+        why, ambiguous = [], c["full"] and (full_s[c["i"]] > 1 or full_t[c["j"]] > 1)
+        if not c["full"]:
+            why.append(f"differs on {_fmt(n - c['identical'])} of {_fmt(n)} paired rows")
+        if c["filled"] < needed:
+            why.append(f"only {_fmt(c['filled'])} filled values (needs {_fmt(needed)})")
+        if c["distinct"] < 2:
+            why.append("the same value in every row")
+        if coverage < settings.RENAME_MIN_COVERAGE:
+            why.append(f"only {coverage:.0%} of the rows pair up (needs {settings.RENAME_MIN_COVERAGE:.0%})")
+        if ambiguous:
+            why.append("another column matches as well")
+        sc, tc = s_only[c["i"]], t_only[c["j"]]
+        out.append({"source": sc["name"], "target": tc["name"], "source_type": sc["type"], "target_type": tc["type"],
+                    "paired": n, "identical": c["identical"], "differing": n - c["identical"], "filled": c["filled"],
+                    "rate": round(c["rate"], 4), "coverage": round(coverage, 4),
+                    "verdict": "verified" if not why else ("ambiguous" if ambiguous else "possible"),
+                    "reason": "; ".join(why) if why else f"identical on all {_fmt(n)} paired rows"})
+        taken_s.add(c["i"])
+        taken_t.add(c["j"])
+    v = sum(1 for r in out if r["verdict"] == "verified")
+    run.ctx.note(f"{v} renamed column{'s' if v != 1 else ''} verified by the data"
+                 f"{f', {len(out) - v} to review' if len(out) > v else ''} ({_fmt(n)} rows paired).",
+                 "ok" if v else "info")
+    return out, None
 
 
 def _column_diffs(run, shared):

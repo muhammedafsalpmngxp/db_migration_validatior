@@ -20,6 +20,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 
+from .. import runguard
 from . import activity, catalog, conn, datacheck, options, settings
 
 MEASURED = ("identical", "different", "skipped")
@@ -312,7 +313,13 @@ def start(pairs, table=None, only=None, tables="all", skip=None, resumed_from=No
         """One table, waiting out a lost connection. Raises _Stop when the run must end."""
         attempt = 0
         while True:
-            result = datacheck.check_table(p, s, t, *infos[p.id], ctx=ctx, cutoff=options.cutoff(p, s["key"]))
+            try:
+                with runguard.slot(f"the ATNM copy check ({s['schema']}.{s['table']})", cancelled=lambda: ctx.cancelled,
+                                   on_wait=lambda who: note(f"Waiting for {who}: one heavy step at a time on the "
+                                                            "shared servers.", "warn", True)):
+                    result = datacheck.check_table(p, s, t, *infos[p.id], ctx=ctx, cutoff=options.cutoff(p, s["key"]))
+            except runguard.Cancelled as exc:
+                raise datacheck.Stopped("Cancelled.") from exc
             kind = result.get("error_kind")
             if kind in ("login", "config"):
                 store.put(result)

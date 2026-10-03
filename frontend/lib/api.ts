@@ -523,3 +523,68 @@ export const keymapApi = {
     return get<KeyRows>(`/api/key-mapping/rows?${u.toString()}`);
   },
 };
+
+// ---- Target table checks (backend app/quality.py) ----------------------------------------
+
+export type TableCheckFk = {
+  name: string;
+  direction: "outgoing" | "incoming";
+  child: string;
+  columns: string[];
+  references: string;
+  ref_columns: string[];
+  enabled: boolean;
+  trusted: boolean;
+  /** rows pointing at a row that does not exist (0 is guaranteed for an enabled, trusted key) */
+  orphans: number | null;
+  counted: boolean;
+};
+
+export type TableCheckTable = {
+  table: string;
+  exists: boolean;
+  rows?: number;
+  busy?: boolean;
+  primary_key?: string[] | null;
+  source_primary_key?: string[] | null;
+  unique_keys?: string[][];
+  duplicates?: { rows: number; duplicate_rows: number | null; left_out: string[] } | null;
+  source_duplicates?: { rows: number; duplicate_rows: number | null; left_out: string[] } | null;
+  foreign_keys?: TableCheckFk[];
+  /** identity counters: `behind` = the next new row would get a number already used */
+  identity?: { column: string; next_value: number; highest: number | null; lowest: number | null; increment: number; behind: boolean }[];
+};
+
+export type TableCheck = {
+  mapping: string;
+  type: MappingType;
+  checked_at: string;
+  status: "ok" | "review" | "problems" | "skipped" | "locked" | "error" | "timeout";
+  headline: string;
+  tables: TableCheckTable[];
+  findings: { severity: "error" | "review" | "info"; text: string }[];
+  seconds: number;
+};
+
+export const tableChecksApi = {
+  saved: (mapping: string) => get<{ result: TableCheck | null }>(`/api/table-checks/saved?mapping=${encodeURIComponent(mapping)}`),
+  run: (mapping: string) => get<TableCheck>(`/api/table-checks?mapping=${encodeURIComponent(mapping)}&refresh=true`),
+};
+
+// ---- Coverage (backend app/coverage.py) -----------------------------------------------------
+
+export type CoverageDb = {
+  side: Side;
+  name: string;
+  label: string;
+  role: string;
+  tables: number | null;
+  in_plan: number | null;
+  ignored: number | null;
+  not_in_plan: { schema: string; table: string; rows: number | null }[];
+  error: string | null;
+};
+
+export const coverageApi = {
+  get: () => get<{ databases: CoverageDb[]; ignore: string[]; seconds: number }>("/api/coverage"),
+};

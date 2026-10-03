@@ -7,6 +7,7 @@ import { SectionTabs } from "@/components/ATNM/SectionTabs";
 import { ColumnComparison, ColumnList } from "@/components/ColumnComparison";
 import { DataCheck } from "@/components/DataCheck";
 import { KeysView } from "@/components/KeysView";
+import { TableChecks } from "@/components/TableChecks";
 import { MappingView } from "@/components/MappingView";
 import { Overview } from "@/components/Overview";
 import { Sidebar } from "@/components/Sidebar";
@@ -182,6 +183,8 @@ export default function Home() {
                 <DataCheck key={`data|${result.mapping.id}`} mappingId={result.mapping.id} mappingType={result.mapping.type} />
 
                 <KeysView key={`keys|${result.mapping.id}|${scope?.read_at}`} targets={result.mapping.targets} mappingId={result.mapping.id} />
+
+                <TableChecks key={`tc|${result.mapping.id}`} mappingId={result.mapping.id} />
 
                 {result.mapping.type === "excluded" ? (
                   <ColumnList key={sel.ref} columns={result.source_columns} title={`Columns · ${sel.schema}.${sel.table}`} />

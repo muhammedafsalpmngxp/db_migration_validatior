@@ -57,11 +57,169 @@ def compare_columns(src_cols, tgt_cols):
     return rows
 
 
+def apply_renames(rows, saved):
+    """compare_columns rows with the renames the last data check verified by their data
+    (identical on every paired row) shown as one `renamed` column instead of a missing one
+    plus an extra one. Only renames whose two columns still exist that way are applied."""
+    found = [r for r in (saved or {}).get("renames") or [] if r.get("verdict") == "verified"]
+    if not found:
+        return rows
+    missing = {r["name"].lower(): r for r in rows if r["status"] == "missing"}
+    extra = {r["name"].lower(): r for r in rows if r["status"] == "extra"}
+    use = {f["source"].lower(): f for f in found
+           if f["source"].lower() in missing and f["target"].lower() in extra}
+    used_targets = {f["target"].lower() for f in use.values()}
+    out = []
+    for r in rows:
+        name = r["name"].lower()
+        if r["status"] == "missing" and name in use:
+            f = use[name]
+            t = extra[f["target"].lower()]["target"]
+            notes = [f"renamed to {t['name']}: identical on all {_fmt(f['paired'])} paired rows"]
+            severity = "ok"
+            if r["source"]["type"].lower() != t["type"].lower():
+                notes.append(f"type {r['source']['type']} → {t['type']}")
+                severity = "review"
+            if r["source"]["nullable"] != t["nullable"]:
+                notes.append("may now be empty" if t["nullable"] else "may no longer be empty")
+                severity = "review"
+            out.append({"name": r["name"], "source": r["source"], "target": t, "status": "renamed",
+                        "severity": severity, "notes": notes})
+        elif r["status"] == "extra" and name in used_targets:
+            continue
+        else:
+            out.append(r)
+    return out
+
+
+def _cols(names):
+    return tuple(n.lower() for n in names)
+
+
+def _sql_text(definition):
+    """A default or check definition as SQL Server stores it, without spacing, outer
+    brackets or case, so two copies of the same rule compare equal."""
+    text = "".join((definition or "").split()).lower()
+    while text.startswith("(") and text.endswith(")"):
+        inner, depth = text[1:-1], 0
+        for ch in inner:
+            depth += 1 if ch == "(" else -1 if ch == ")" else 0
+            if depth < 0:
+                return text
+        text = inner
+    return text
+
+
+def compare_constraints(src, tgt):
+    """The keys and rules of a table in ATNM against its RDS copy, matched on what they cover
+    (columns, referenced table, definition), never on their names: a copy may name them
+    differently. One row each: {kind, what, status, severity, note}.
+
+    status: same | missing (not in RDS) | changed | extra (only in RDS). A missing or changed
+    primary key is a problem (nothing stops duplicate rows any more); a missing unique key,
+    foreign key, default or check rule is for review; one only in RDS is just listed.
+    None when either side's keys could not be read.
+    """
+    if src is None or tgt is None:
+        return None
+    rows = []
+
+    def add(kind, what, status, severity, note=""):
+        rows.append({"kind": kind, "what": what, "status": status, "severity": severity, "note": note})
+
+    sp, tp = src.get("primary_key"), tgt.get("primary_key")
+    if sp and not tp:
+        add("primary key", ", ".join(sp), "missing", "problem", "RDS has no primary key: duplicate rows are not prevented")
+    elif sp and _cols(sp) != _cols(tp):
+        add("primary key", ", ".join(sp), "changed", "problem", f"RDS has its primary key on {', '.join(tp)}")
+    elif sp:
+        add("primary key", ", ".join(sp), "same", "ok")
+    elif tp:
+        add("primary key", ", ".join(tp), "extra", "ok", "only in RDS")
+
+    su = {_cols(u): u for u in src.get("unique") or []}
+    tu = {_cols(u): u for u in tgt.get("unique") or []}
+    for k, u in su.items():
+        if k in tu:
+            add("unique key", ", ".join(u), "same", "ok")
+        else:
+            add("unique key", ", ".join(u), "missing", "review", "not in RDS: duplicate values are not prevented")
+    for k, u in tu.items():
+        if k not in su:
+            add("unique key", ", ".join(u), "extra", "ok", "only in RDS")
+
+    def fk_key(f):
+        return _cols(f["columns"]), f["ref_table"].lower(), _cols(f["ref_columns"])
+
+    def fk_what(f):
+        return f"{', '.join(f['columns'])} → {f['ref_table']}({', '.join(f['ref_columns'])})"
+
+    sf = {fk_key(f): f for f in src.get("foreign_keys") or []}
+    tf = {fk_key(f): f for f in tgt.get("foreign_keys") or []}
+    for k, f in sf.items():
+        t = tf.get(k)
+        if t is None:
+            add("foreign key", fk_what(f), "missing", "review", "not in RDS: the link is not enforced")
+        elif f["enabled"] and not t["enabled"]:
+            add("foreign key", fk_what(f), "changed", "review", "disabled in RDS: the link is not enforced")
+        elif f["trusted"] and not t["trusted"]:
+            add("foreign key", fk_what(f), "changed", "review", "not trusted in RDS: existing rows were never checked")
+        else:
+            add("foreign key", fk_what(f), "same", "ok")
+    for k, f in tf.items():
+        if k not in sf:
+            add("foreign key", fk_what(f), "extra", "ok", "only in RDS")
+
+    sd = {c.lower(): (c, d) for c, d in (src.get("defaults") or {}).items()}
+    td = {c.lower(): (c, d) for c, d in (tgt.get("defaults") or {}).items()}
+    for k, (c, d) in sd.items():
+        if k not in td:
+            add("default value", f"{c} = {d}", "missing", "review", "not in RDS: new rows get no default")
+        elif _sql_text(d) != _sql_text(td[k][1]):
+            add("default value", f"{c} = {d}", "changed", "review", f"RDS default is {td[k][1]}")
+        else:
+            add("default value", f"{c} = {d}", "same", "ok")
+    for k, (c, d) in td.items():
+        if k not in sd:
+            add("default value", f"{c} = {d}", "extra", "ok", "only in RDS")
+
+    sc = {_sql_text(c["definition"]): c for c in src.get("checks") or []}
+    tc = {_sql_text(c["definition"]): c for c in tgt.get("checks") or []}
+    for k, c in sc.items():
+        if k not in tc:
+            add("check rule", c["definition"], "missing", "review", "not in RDS: the rule is not enforced")
+        elif c["enabled"] and not tc[k]["enabled"]:
+            add("check rule", c["definition"], "changed", "review", "disabled in RDS")
+        else:
+            add("check rule", c["definition"], "same", "ok")
+    for k, c in tc.items():
+        if k not in sc:
+            add("check rule", c["definition"], "extra", "ok", "only in RDS")
+    return rows
+
+
+def constraint_summary(rows):
+    """Counts of compare_constraints rows, and their worst severity (None: not compared)."""
+    if rows is None:
+        return None
+    return {
+        "total": sum(1 for r in rows if r["status"] != "extra"),
+        "same": sum(1 for r in rows if r["status"] == "same"),
+        "missing": sum(1 for r in rows if r["status"] == "missing"),
+        "changed": sum(1 for r in rows if r["status"] == "changed"),
+        "extra": sum(1 for r in rows if r["status"] == "extra"),
+        "severity": _worst(*(r["severity"] for r in rows)),
+        "rows": rows,
+    }
+
+
 def column_summary(rows):
     return {
         "source": sum(1 for r in rows if r["source"]),
         "target": sum(1 for r in rows if r["target"]),
         "same": sum(1 for r in rows if r["status"] == "same"),
+        "renamed": [{"source": r["name"], "target": r["target"]["name"], "notes": r["notes"], "severity": r["severity"]}
+                    for r in rows if r["status"] == "renamed"],
         "missing": [r["name"] for r in rows if r["status"] == "missing"],
         "extra": [r["name"] for r in rows if r["status"] == "extra"],
         "changed": [{"name": r["name"], "notes": r["notes"], "severity": r["severity"]}
@@ -114,8 +272,6 @@ def table_view(key, src, tgt, saved, cutoff=None, live=None):
         return view
 
     rows = compare_columns(src["columns"], tgt["columns"])
-    cols = column_summary(rows)
-    view["columns"] = cols
 
     # The data check, while it still describes the tables as they are.
     data = None
@@ -146,6 +302,17 @@ def table_view(key, src, tgt, saved, cutoff=None, live=None):
                             "metadata_source": src["rows"], "metadata_target": tgt["rows"]}
     view["data"] = data
 
+    # Columns: a rename the data check verified counts as the same column, but only while
+    # that check still describes the tables.
+    current = saved if data is not None and not data["stale"] else None
+    cols = column_summary(apply_renames(rows, current))
+    view["columns"] = cols
+    possible = [r for r in (current or {}).get("renames") or [] if r.get("verdict") != "verified"]
+
+    # Keys and rules (primary, unique and foreign keys, defaults, checks).
+    cons = constraint_summary(compare_constraints(src.get("constraints"), tgt.get("constraints")))
+    view["constraints"] = cons
+
     n_src, n_tgt = view["rows"]["source"], view["rows"]["target"]
     rows_level = "ok" if n_src == n_tgt else "problem"
     if data is None or data["stale"]:
@@ -156,12 +323,32 @@ def table_view(key, src, tgt, saved, cutoff=None, live=None):
         data_level = "problem"
     else:   # error, timeout, changed, locked, skipped: not measured
         data_level = "none"
-    view["checks"] = {"table": "ok", "columns": cols["severity"], "rows": rows_level, "data": data_level}
+    view["checks"] = {"table": "ok", "columns": cols["severity"], "rows": rows_level, "data": data_level,
+                      "constraints": cons["severity"] if cons else "none"}
 
     reasons = []
     if cols["missing"]:
         reasons.append(("problem", f"{len(cols['missing'])} column{'s' if len(cols['missing']) != 1 else ''} "
                                    f"missing in RDS: {_names(cols['missing'])}"))
+    for r in possible:
+        reasons.append(("review", f"Possible rename {r['source']} → {r['target']}: {r['reason']}"))
+    for s in (current or {}).get("identity") or []:
+        if s.get("behind"):
+            reasons.append(("problem", f"Identity counter of {s['column']} in RDS is behind (next value "
+                                       f"{_fmt(s['next_value'])}, {_fmt(s['highest'] if s['increment'] > 0 else s['lowest'])} already used): "
+                                       "new inserts will fail"))
+    if cons:
+        lost_pk = [r for r in cons["rows"] if r["kind"] == "primary key" and r["severity"] == "problem"]
+        for r in lost_pk:
+            reasons.append(("problem", f"Primary key ({r['what']}) {r['note'] if r['status'] == 'changed' else 'not in RDS'}"))
+        soft_cons = [r for r in cons["rows"] if r["severity"] == "review"]
+        if soft_cons:
+            kinds = {}
+            for r in soft_cons:
+                kinds[r["kind"]] = kinds.get(r["kind"], 0) + 1
+            reasons.append(("review", f"{len(soft_cons)} key{'s' if len(soft_cons) != 1 else ''} or rule"
+                                      f"{'s' if len(soft_cons) != 1 else ''} not kept in RDS: "
+                                      + ", ".join(f"{n} {k}{'s' if n != 1 else ''}" for k, n in kinds.items())))
     type_changes = [c for c in cols["changed"] if c["severity"] == "problem"]
     if type_changes:
         reasons.append(("problem", f"{len(type_changes)} column type{'s' if len(type_changes) != 1 else ''} changed: "
@@ -177,6 +364,8 @@ def table_view(key, src, tgt, saved, cutoff=None, live=None):
         reasons.append(("review", f"{len(cols['extra'])} column{'s' if len(cols['extra']) != 1 else ''} only in RDS: "
                                   f"{_names(cols['extra'])}"))
     soft = [c for c in cols["changed"] if c["severity"] == "review"]
+    soft += [{"name": f"{c['source']} → {c['target']}", "notes": c["notes"][1:]}
+             for c in cols["renamed"] if c["severity"] == "review"]
     if soft:
         reasons.append(("review", _names([f"{c['name']}: {', '.join(c['notes'])}" for c in soft], 3)))
 

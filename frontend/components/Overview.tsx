@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { fmt, fmtDelta, MAPPING_TYPE_LABEL, type CheckStatus, type Scope, type ScopeTable } from "@/lib/api";
+import { Coverage } from "./Coverage";
 import { DATA_STATUS } from "./DataCheck";
 import { DataOverview, useDataResults } from "./DataOverview";
 import { Badge, Card, CHECK, SideTag, Stat } from "./ui";
@@ -166,6 +167,8 @@ export function Overview({ scope, onSelect }: { scope: Scope; onSelect: (ref: st
           </table>
         </div>
       </Card>
+
+      <Coverage />
     </div>
   );
 }

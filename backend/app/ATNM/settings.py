@@ -121,6 +121,13 @@ LOCK_TIMEOUT_MS = int(_env("ATNM_LOCK_TIMEOUT_MS", "5000"))
 DIFF_ROWS_MAX = int(_env("ATNM_DIFF_ROWS_MAX", "100000"))
 # Tables above this many rows are not value-checked; 0 means no limit.
 DATA_CHECK_MAX_ROWS = int(_env("ATNM_DATA_CHECK_MAX_ROWS", "0"))
+# Renamed columns are found by their data with the rules of the RDS rename check (the same
+# RENAME_* settings): identical on every paired row, enough filled values, more than one
+# value, and enough of the rows paired. Rows are paired on the row key (or on the columns
+# both tables share), reading keys and hashes only, up to ATNM_DIFF_ROWS_MAX rows per side.
+RENAME_MIN_VALUES = int(_env("RENAME_MIN_VALUES", "100"))
+RENAME_MIN_COVERAGE = float(_env("RENAME_MIN_COVERAGE", "0.5"))
+RENAME_POSSIBLE_MIN = float(_env("RENAME_POSSIBLE_MIN", "0.5"))
 # How long the table lists of a database are reused before they are read again.
 CACHE_SECONDS = int(_env("ATNM_CACHE_SECONDS", str(config.TABLE_CACHE_SECONDS)))
 RESULT_FILE = Path(_env("ATNM_RESULT_FILE", config.BACKEND_DIR / ".cache" / "atnm_checks.json"))

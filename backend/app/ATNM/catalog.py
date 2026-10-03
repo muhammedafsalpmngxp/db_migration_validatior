@@ -48,6 +48,90 @@ ORDER BY i.object_id, i.is_primary_key DESC, i.index_id, ic.key_ordinal
 """
 
 
+# The keys and rules a copy should keep (app.ATNM.structure.compare_constraints): primary
+# and unique keys, foreign keys, default values and check rules. Catalog views only.
+UNIQUE_SQL = """
+SELECT i.object_id, i.index_id, i.is_primary_key, c.name, ic.key_ordinal
+FROM sys.indexes i
+JOIN sys.tables t ON t.object_id = i.object_id
+JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+WHERE t.is_ms_shipped = 0 AND i.is_unique = 1 AND ic.key_ordinal > 0
+ORDER BY i.object_id, i.index_id, ic.key_ordinal
+"""
+
+FOREIGN_KEYS_SQL = """
+SELECT fk.parent_object_id AS object_id, fk.name, fk.is_disabled, fk.is_not_trusted,
+       OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS ref_schema, OBJECT_NAME(fk.referenced_object_id) AS ref_table,
+       pc.name AS col, rc.name AS ref_col
+FROM sys.foreign_keys fk
+JOIN sys.tables t ON t.object_id = fk.parent_object_id
+JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+WHERE t.is_ms_shipped = 0
+ORDER BY fk.parent_object_id, fk.name, fkc.constraint_column_id
+"""
+
+DEFAULTS_SQL = """
+SELECT d.parent_object_id AS object_id, c.name AS col, d.definition
+FROM sys.default_constraints d
+JOIN sys.tables t ON t.object_id = d.parent_object_id
+JOIN sys.columns c ON c.object_id = d.parent_object_id AND c.column_id = d.parent_column_id
+WHERE t.is_ms_shipped = 0
+"""
+
+CHECKS_SQL = """
+SELECT k.parent_object_id AS object_id, k.definition, k.is_disabled
+FROM sys.check_constraints k
+JOIN sys.tables t ON t.object_id = k.parent_object_id
+WHERE t.is_ms_shipped = 0
+"""
+
+
+def _constraints(cur):
+    """{object_id: {primary_key, unique, foreign_keys, defaults, checks}}, or None when the
+    catalog cannot be read right now (another session holds it)."""
+    try:
+        uniques = conn.fetch(cur, UNIQUE_SQL)
+        fks = conn.fetch(cur, FOREIGN_KEYS_SQL)
+        defaults = conn.fetch(cur, DEFAULTS_SQL)
+        checks = conn.fetch(cur, CHECKS_SQL)
+    except conn.Locked:
+        return None
+    out = {}
+
+    def of(oid):
+        return out.setdefault(oid, {"primary_key": None, "unique": [], "foreign_keys": [], "defaults": {}, "checks": []})
+
+    idx = {}
+    for r in uniques:
+        idx.setdefault((r["object_id"], r["index_id"]), {"primary": bool(r["is_primary_key"]), "columns": []})["columns"].append(r["name"])
+    for (oid, _), ix in sorted(idx.items()):
+        if ix["primary"]:
+            of(oid)["primary_key"] = ix["columns"]
+        elif ix["columns"] not in of(oid)["unique"]:
+            of(oid)["unique"].append(ix["columns"])
+    seen = {}
+    for r in fks:
+        f = seen.get((r["object_id"], r["name"]))
+        if f is None:
+            f = seen[(r["object_id"], r["name"])] = {"columns": [], "ref_table": f"{r['ref_schema']}.{r['ref_table']}",
+                                                     "ref_columns": [], "enabled": not r["is_disabled"],
+                                                     "trusted": not r["is_not_trusted"]}
+            of(r["object_id"])["foreign_keys"].append(f)
+        f["columns"].append(r["col"])
+        f["ref_columns"].append(r["ref_col"])
+    for r in defaults:
+        of(r["object_id"])["defaults"][r["col"]] = r["definition"]
+    for r in checks:
+        of(r["object_id"])["checks"].append({"definition": r["definition"], "enabled": not r["is_disabled"]})
+    return out
+
+
+NO_CONSTRAINTS = {"primary_key": None, "unique": [], "foreign_keys": [], "defaults": {}, "checks": []}
+
+
 def _type_text(col):
     """nvarchar(50), decimal(18,2), datetime2(7) ... as SQL Server shows them."""
     return app_db.render_type({"type": col["type"], "max_length": col["max_length"],
@@ -62,6 +146,7 @@ def _read(server, database):
         tables = conn.fetch(cur, TABLES_SQL)
         columns = conn.fetch(cur, COLUMNS_SQL)
         keys = conn.fetch(cur, KEYS_SQL)
+        constraints = _constraints(cur)
 
     cols_of = {}
     for c in columns:
@@ -105,6 +190,9 @@ def _read(server, database):
             "created": t["created"].isoformat(timespec="seconds") if t["created"] else None,
             "columns": cols_of.get(t["object_id"], []),
             "row_key": key_of.get(t["object_id"]),
+            # None: the keys and rules could not be read this time (shown as not compared)
+            "constraints": (None if constraints is None
+                            else constraints.get(t["object_id"], NO_CONSTRAINTS)),
         }
     return {
         "database": info["db"],

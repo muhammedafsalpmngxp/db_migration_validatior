@@ -42,10 +42,12 @@ mappings:
     sources: [A.dbo.ActivityMasterMapping]
     targets: [T.dbo.activity_master_mapping]
 
-  - id: activity_task_plan
-    type: one_to_one
-    sources: [A.dbo.ActivityTaskPlan]
-    targets: [T.dbo.activity_task_plan]
+  # Removed from the checks (2026-10-03): too heavy for the shared AWS server. To check it
+  # again, remove the # from the next four lines.
+  # - id: activity_task_plan
+  #   type: one_to_one
+  #   sources: [A.dbo.ActivityTaskPlan]
+  #   targets: [T.dbo.activity_task_plan]
 
   - id: activity_taskplan_job_progress
     type: one_to_one
@@ -269,10 +271,12 @@ mappings:
 
   # ---- AppMasterEngDB_Local ---------------------------------------------------------
 
-  - id: engineering_acc_dump
-    type: one_to_one
-    sources: [B.dbo.EngineeringACCDump]
-    targets: [T.dbo.engineering_acc_dump]
+  # Removed from the checks (2026-10-03): too heavy for the shared AWS server. To check it
+  # again, remove the # from the next four lines.
+  # - id: engineering_acc_dump
+  #   type: one_to_one
+  #   sources: [B.dbo.EngineeringACCDump]
+  #   targets: [T.dbo.engineering_acc_dump]
 
   - id: engineering_task_plan
     type: one_to_one

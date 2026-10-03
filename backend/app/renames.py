@@ -48,7 +48,7 @@ import pyodbc
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from . import compare, config, db
+from . import compare, config, db, runguard
 from . import datacheck as dc
 
 _env = config._env
@@ -820,8 +820,12 @@ def start(mappings, entry_of_factory, refresh=False):
                 job["current"] = m.id
                 log.add(f"Checking mapping {m.id} ({m.type}).", mapping=m.id, step=True)
                 try:
-                    result = check(m, entry_of, ctx)
-                except Stopped:
+                    with runguard.slot(f"the rename check ({m.id})", cancelled=lambda: ctx.cancelled,
+                                       on_wait=lambda who: log.add(f"Waiting for {who}: one heavy step at a time on "
+                                                                   "the shared servers.", "warn", mapping=m.id,
+                                                                   step=True)):
+                        result = check(m, entry_of, ctx)
+                except (Stopped, runguard.Cancelled):
                     log.add("Stopped while checking this mapping; nothing saved for it.", "warn", mapping=m.id)
                     break
                 store.put(result)

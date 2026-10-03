@@ -3,14 +3,24 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { fmt } from "@/lib/api";
 import { Badge, Dot, ErrorBox, Spinner } from "../ui";
-import { atnmApi, LEVEL_TONE, type ColumnCompare, type DataResult, type Job, type TableDetail as Detail } from "./api";
+import {
+  atnmApi, LEVEL_TONE, type ColumnCompare, type ConstraintSummary, type DataResult, type Job, type TableDetail as Detail,
+} from "./api";
 
-const COLUMN_STATUS: Record<ColumnCompare["status"], { label: string; tone: "ok" | "warn" | "bad" | "accent" }> = {
+const COLUMN_STATUS: Record<ColumnCompare["status"], { label: string; tone: "ok" | "warn" | "bad" | "accent" | "info" }> = {
   same: { label: "Same", tone: "ok" },
   missing: { label: "Missing in RDS", tone: "bad" },
   extra: { label: "Only in RDS", tone: "accent" },
   changed: { label: "Changed", tone: "warn" },
+  renamed: { label: "Renamed", tone: "info" },
 };
+
+const CONSTRAINT_STATUS = {
+  same: { label: "Kept", tone: "ok" },
+  missing: { label: "Not in RDS", tone: "bad" },
+  changed: { label: "Changed", tone: "warn" },
+  extra: { label: "Only in RDS", tone: "accent" },
+} as const;
 
 const FINDING_TONE = { ok: "ok", info: "neutral", review: "warn", problem: "bad", error: "bad" } as const;
 
@@ -54,7 +64,10 @@ function Columns({ columns, labels }: { columns: ColumnCompare[]; labels: { sour
             <tbody>
               {shown.map((c) => (
                 <tr key={c.name} className="border-t border-border align-top">
-                  <td className="px-3 py-2 font-medium">{c.name}</td>
+                  <td className="px-3 py-2 font-medium">
+                    {c.name}
+                    {c.status === "renamed" && c.target && <span className="font-normal text-muted"> → {c.target.name}</span>}
+                  </td>
                   <td className="px-3 py-2 font-mono text-xs">{c.source?.type ?? "—"}</td>
                   <td className={`px-3 py-2 font-mono text-xs ${c.source && c.target && c.source.type !== c.target.type ? "text-bad" : ""}`}>
                     {c.target?.type ?? "—"}
@@ -70,6 +83,114 @@ function Columns({ columns, labels }: { columns: ColumnCompare[]; labels: { sour
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Primary, unique and foreign keys, default values and check rules: kept in RDS or not. */
+function Constraints({ c }: { c: ConstraintSummary | null | undefined }) {
+  const [all, setAll] = useState(false);
+  if (c === undefined) return null;
+  const notKept = c ? c.rows.filter((r) => r.status === "missing" || r.status === "changed") : [];
+  const shown = c ? (all ? c.rows : notKept) : [];
+  const title = c === null ? "could not be read" : c.rows.length === 0 ? "none on either side"
+    : notKept.length ? `${notKept.length} not kept in RDS` : `all ${c.total} kept`;
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">Keys and rules · {title}</h4>
+        {c && c.rows.length > 0 && (
+          <button type="button" onClick={() => setAll(!all)} className="text-xs text-accent hover:underline">
+            {all ? "Show only differences" : `Show all ${c.rows.length}`}
+          </button>
+        )}
+      </div>
+      {c === null ? (
+        <p className="text-sm text-muted">
+          The keys and rules could not be read this time (another session held the catalog). Refresh to try again.
+        </p>
+      ) : shown.length === 0 ? (
+        <p className="text-sm text-muted">
+          {c.rows.length === 0
+            ? "Neither table has a primary key, unique key, foreign key, default value or check rule."
+            : "Every primary key, unique key, foreign key, default value and check rule of ATNM is kept in RDS."}
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full min-w-[560px] text-sm">
+            <thead className="bg-surface-2 text-left text-xs text-muted">
+              <tr>
+                <th className="px-3 py-2 font-medium">Kind</th>
+                <th className="px-3 py-2 font-medium">What</th>
+                <th className="px-3 py-2 font-medium">Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((r, i) => (
+                <tr key={i} className="border-t border-border align-top">
+                  <td className="whitespace-nowrap px-3 py-2 text-xs text-muted">{r.kind}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{r.what}</td>
+                  <td className="px-3 py-2">
+                    <Badge tone={CONSTRAINT_STATUS[r.status].tone}>{CONSTRAINT_STATUS[r.status].label}</Badge>
+                    {r.note && <div className="mt-1 text-xs text-muted">{r.note}</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+type Empty = { nulls: number; blanks: number | null } | null;
+
+/** NULL and blank values of every column on both servers, from the last data check. */
+function EmptyValues({ profile, labels }: {
+  profile: NonNullable<DataResult["profile"]>;
+  labels: { source: string; target: string };
+}) {
+  const [all, setAll] = useState(false);
+  const count = (e: Empty) => (e ? e.nulls + (e.blanks ?? 0) : null);
+  const differ = profile.columns.filter((c) => c.source && c.target && count(c.source) !== count(c.target));
+  const shown = all ? profile.columns : differ;
+  const cell = (e: Empty) => (e ? `${fmt(e.nulls)} NULL${e.blanks ? ` · ${fmt(e.blanks)} blank` : ""}` : "—");
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">
+          Empty values · {differ.length ? `${differ.length} columns differ` : "the same in every shared column"}
+        </h4>
+        <button type="button" onClick={() => setAll(!all)} className="text-xs text-accent hover:underline">
+          {all ? "Show only differences" : `Show all ${profile.columns.length} columns`}
+        </button>
+      </div>
+      {shown.length > 0 && (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full min-w-[480px] text-sm">
+            <thead className="bg-surface-2 text-left text-xs text-muted">
+              <tr>
+                <th className="px-3 py-2 font-medium">Column</th>
+                <th className="px-3 py-2 text-right font-medium">{labels.source} ({fmt(profile.rows.source)} rows)</th>
+                <th className="px-3 py-2 text-right font-medium">{labels.target} ({fmt(profile.rows.target)} rows)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map((c) => {
+                const off = c.source && c.target && count(c.source) !== count(c.target);
+                return (
+                  <tr key={c.name} className="border-t border-border">
+                    <td className="px-3 py-2 font-medium">{c.name}</td>
+                    <td className="num px-3 py-2 text-right text-xs">{cell(c.source)}</td>
+                    <td className={`num px-3 py-2 text-right text-xs ${off ? "text-bad" : ""}`}>{cell(c.target)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -240,6 +361,8 @@ export function TableDetail({ pair, tableKey, labels, job, version, onCheck }: {
 
       {bothSides && <Columns key={t.key} columns={detail.columns} labels={labels} />}
 
+      {bothSides && <Constraints key={`c|${t.key}`} c={t.constraints} />}
+
       {bothSides && (
         <section>
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -282,6 +405,8 @@ export function TableDetail({ pair, tableKey, labels, job, version, onCheck }: {
           <Values data={detail.data} labels={labels} />
         </section>
       )}
+
+      {bothSides && detail.data?.profile && <EmptyValues key={`e|${t.key}`} profile={detail.data.profile} labels={labels} />}
     </div>
   );
 }
