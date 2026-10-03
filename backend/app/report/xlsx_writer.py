@@ -254,7 +254,7 @@ def _main2(wb, ev):
         nc = [n for n in ev["not_checked"] if n["part"] == 2 and n["item"] == i["mapping"]]
         flagged = {c.strip() for x in issues for c in (x["column"] or "").replace("→", ",").split(",")}
         values = [v for v in p2["values"] if v["mapping"] == i["mapping"]]
-        notes = []
+        notes = list(i.get("notes") or [])
         for v in values:
             if v["column"].split(" →")[0].strip() in flagged:
                 continue

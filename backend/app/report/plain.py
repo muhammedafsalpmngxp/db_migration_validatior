@@ -1,5 +1,11 @@
 """The words of the report: results, what each kind of finding means, and what to do -
-written for a reader who has not worked on the migration."""
+written for a reader who has not worked on the migration. Database names come from the
+configuration (backend/.env), never from here."""
+from .. import config
+
+# The new system's database, and one source database as an example (DB_*_NAME in .env).
+TARGET_DB = config.DATABASES[config.TARGET_SIDE]["name"]
+EXAMPLE_DB = config.DATABASES[config.SOURCE_SIDES[0]]["name"]
 
 # Results, most severe first.
 MUST_FIX = "Must fix"
@@ -88,7 +94,7 @@ def action(kind):
 GLOSSARY = [
     ("Server", "A computer that runs the databases. ATNM is the client's server (reached over VPN); RDS is the "
                "AWS server that holds the copies and the new system."),
-    ("Database", "A collection of tables, e.g. AppMasterDB."),
+    ("Database", f"A collection of tables, e.g. {EXAMPLE_DB}."),
     ("Table", "A list of records, like a sheet in Excel."),
     ("Row / record", "One entry in a table, like one line in a sheet."),
     ("Column", "One kind of information in a table, like one column in a sheet."),
@@ -96,5 +102,5 @@ GLOSSARY = [
     ("Renamed column", "The same information under a different column name in the target table; confirmed only when every value is identical."),
     ("Migration plan", "The list of which source tables become which target tables (backend/mappings/migration_plan.yaml)."),
     ("Section 1: ATNM → RDS", "The copy of the client's databases to the RDS server; should be an exact copy."),
-    ("Section 2: RDS → AlTasnimBI", "The move into the new system; tables are renamed, reshaped and linked."),
+    (f"Section 2: RDS → {TARGET_DB}", "The move into the new system; tables are renamed, reshaped and linked."),
 ]

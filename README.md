@@ -237,6 +237,15 @@ and records pointing at nothing. Table rules and settings (primary/unique/foreig
 defaults, check rules, identity counters, can-be-empty, collation) are not graded or listed
 in the report; the ATNM and RDS pages still show them.
 
+Section 2 pairs columns by the data where the names mislead: a name pair whose target column is
+empty on every row is undone so the rename check finds where the values went (ID → id empty,
+the ids in equipment_type_id); a text column turned into an id with no foreign key is checked
+through the list found by the column's name (used only when that one list holds every source
+value, and then every row is compared through it); a source column whose
+value is the name in the list a link points to (Type next to Type_Code) is checked row by row
+as one more link; columns empty on every row are notes, not decisions; and the report shows
+one line per column.
+
 Both files have the same two sections: **Section 1 · ATNM → RDS** (the copy) and **Section 2 ·
 RDS → AlTasnimBI** (the move into the new system). The Word report: cover, summary, then per
 section every table (or mapping) with its result, what must be fixed and what needs a

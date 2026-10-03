@@ -99,6 +99,8 @@ class Link:
         self.coverage = None            # {"distinct", "found", "sampled"}
         self.old = None                 # meaning: the old list and its key and label columns
         self.reason = None              # why it cannot be checked
+        self.seen = {}                  # source column (lower) -> (column, list column, values found, distinct)
+        self.extra_of = None            # another source column also carried by this id (see _extra_feeders)
 
     @property
     def ref_name(self):
@@ -237,6 +239,12 @@ def _find_sources(prep, links):
     per_link = {}
     for t, (lk, c) in enumerate(tests):
         per_link.setdefault(lk.j, []).append((t, c))
+    for lk in todo:
+        for t, c in per_link.get(lk.j, []):
+            for n, sc in enumerate(scols):
+                h = hits.get((n, t), 0)
+                if h and h > lk.seen.get(sc["name"].lower(), (None, None, 0))[2]:
+                    lk.seen[sc["name"].lower()] = (sc, c, h, total.get(n, 0))
 
     # A paired source column: the referenced column that holds most of its values (the key on a tie).
     for lk in todo:
@@ -366,6 +374,35 @@ def _old_list(prep, link, plan, entry_of):
     link.r = lt
     return {"side": old.ref.side, "schema": entry["schema"], "table": entry["table"],
             "key": okey["name"], "label": ls["name"], "label_type": ls["type"]}
+
+
+def _extra_feeders(prep, links):
+    """Source columns with no target column whose meaning the id keeps all the same: the
+    new table stores project_type_id where the old one had both Type_Code ('CTW') and Type
+    ('Conventional Well'); one feeds the id, and the other is the name of the same list
+    row. Each such column - unpaired, text, every one of its distinct values (measured in
+    _find_sources) found in a text column of the list - is checked as one
+    more link on the same id, row by row: the id must point at a row whose column holds the
+    source value. Nothing is named here; the values decide."""
+    paired = {r["source"]["name"].lower() for r in prep.rows if r["source"] and r["target"]}
+    used = {lk.s["name"].lower() for lk in links if lk.s}
+    extra = []
+    for lk in links:
+        if not lk.mode or lk.reason or lk.mode == "meaning":
+            continue
+        for name, (sc, c, hits, distinct) in sorted(lk.seen.items()):
+            if name in paired or name in used or not distinct or _bt(sc["type"]) not in TEXT:
+                continue
+            if c["name"].lower() == lk.k["name"].lower() or (lk.r and c["name"].lower() == lk.r["name"].lower()):
+                continue
+            if hits < distinct:
+                continue
+            x = Link(len(links) + len(extra), lk.fk, lk.f, lk.k, lk.ref_cols)
+            x.s, x.how, x.r, x.mode, x.extra_of = sc, "found", c, "lookup", lk.s["name"] if lk.s else None
+            x.coverage = {"distinct": distinct, "found": hits, "sampled": (lk.coverage or {}).get("sampled")}
+            extra.append(x)
+            used.add(name)
+    links.extend(extra)
 
 
 def _copy_columns(prep, links):
@@ -845,6 +882,7 @@ def _link_view(lk):
         "found_by": ("values" if lk.how == "found" else "pairing") if lk.s else None,
         "label": lk.r["name"] if lk.r else None, "mode": lk.mode, "via": lk.via if lk.mode else None,
         "copy": lk.copy["name"] if lk.copy else None, "old": lk.old, "coverage": lk.coverage,
+        "extra_of": lk.extra_of,
     }
 
 
@@ -883,6 +921,7 @@ def _check(m, entry_of, plan):
             if old:
                 lk.old, lk.mode = old, "meaning"
     _copy_columns(prep, links)
+    _extra_feeders(prep, links)
     ready = [lk for lk in links if lk.mode and not lk.reason]
 
     results, rows, rows_equal, top = {}, None, True, []

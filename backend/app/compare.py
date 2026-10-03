@@ -31,7 +31,8 @@ def _prefixed_names(source_name, target_table):
     return [p + base for p in prefixes]
 
 
-def align_columns(source_cols, target_cols, target_table=None, declared=None, fk_columns=None):
+def align_columns(source_cols, target_cols, target_table=None, declared=None, fk_columns=None,
+                  empty_targets=None, filled_sources=None):
     """Pair source and target columns, then report what differs in each pair.
 
     Pairing runs in rounds, each only over columns still unpaired:
@@ -46,6 +47,13 @@ def align_columns(source_cols, target_cols, target_table=None, declared=None, fk
     `fk_columns` (lower-case target column names that are foreign keys to another table)
     keeps the table-prefix guess off them: on bridge.crew_employee, source `id` is the
     row's own id, not `crew_id`, which points at ref.crew.
+
+    `empty_targets` and `filled_sources` (lower-case names, measured by the data check) undo
+    a name pair whose target column is empty on every row while the source column holds
+    values: the name points at an unused column (ID -> id, while the ids were loaded into
+    equipment_type_id), so the data has to decide - the source column is left unpaired for
+    the rename check, and the row says which pair was undone (`released`). A pair declared
+    in the mapping file is never undone.
 
     Returns (rows, summary). Each row carries `source` and/or `target`, the round that
     paired it (`match`), its differences, and one `status`:
@@ -113,11 +121,21 @@ def align_columns(source_cols, target_cols, target_table=None, declared=None, fk
     # One source column at a time, suffix guesses before prefix guesses.
     round_by(inferred, "inferred")
 
+    released = {}
+    if empty_targets and filled_sources:
+        for src, (tgt, how) in list(pairs.items()):
+            if how != "declared" and tgt["name"].lower() in empty_targets and src.lower() in filled_sources:
+                del pairs[src]
+                remaining[tgt["name"]] = tgt
+                released[src] = tgt["name"]
+
     rows = []
     for col in source_cols:
         if col["name"] not in pairs:
-            rows.append({"source": col, "target": None, "match": None, "diffs": [],
-                         "status": "source_only"})
+            row = {"source": col, "target": None, "match": None, "diffs": [], "status": "source_only"}
+            if col["name"] in released:
+                row["released"] = released[col["name"]]
+            rows.append(row)
             continue
         tgt, how = pairs[col["name"]]
         diffs = []
@@ -143,6 +161,7 @@ def align_columns(source_cols, target_cols, target_table=None, declared=None, fk
     summary = {s: 0 for s in ("match", "renamed", "changed", "source_only", "target_only")}
     for r in rows:
         summary[r["status"]] += 1
+    summary["released"] = len(released)
     summary["type_changes"] = sum("type" in r["diffs"] for r in rows)
     summary["nullable_changes"] = sum("nullable" in r["diffs"] for r in rows)
     summary["source_columns"] = len(source_cols)

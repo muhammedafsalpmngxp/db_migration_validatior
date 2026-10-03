@@ -234,8 +234,12 @@ def _prepare(m, entry_of, tmember):
     p.pk = next((k for k in keys["keys"] if k["kind"] == "primary"), None)
     p.source_keys = [k["columns"] for s, e in zip(srcs, sentries)
                      for k in db.table_keys(s.ref.side, e["object_id"])["keys"]]
+    # A name pair to a target column the data check found empty on every row is undone, so
+    # the source column is tried against the leftover columns here (compare.align_columns).
+    empty = dc.saved_emptiness(m.id, f"{tentry['schema']}.{tentry['table']}")
     p.rows, _ = compare.align_columns(p.source_cols[0], p.tcols, target_table=tentry["table"],
-                                      declared=m.columns, fk_columns=p.outgoing)
+                                      declared=m.columns, fk_columns=p.outgoing,
+                                      empty_targets=empty[0], filled_sources=empty[1])
     comparable = [r for r in p.rows if r["source"] and r["target"]
                   and dc._bt(r["source"]["type"]) not in dc.NOCOMPARE and dc._bt(r["target"]["type"]) not in dc.NOCOMPARE]
     p.pairs = [dc.Pair(i, r) for i, r in enumerate(comparable)]
@@ -725,7 +729,7 @@ def _other_run():
     try:
         from . import main as app_main
         if app_main._checks.job.get("running"):
-            return "the RDS → AlTasnimBI data check run"
+            return f"the RDS → {config.DATABASES[config.TARGET_SIDE]['name']} data check run"
     except Exception:
         pass
     try:

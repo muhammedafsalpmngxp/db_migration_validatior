@@ -36,14 +36,14 @@ SCHEMA = {
     },
 }
 
-SYSTEM = """You write the summary of a database migration check report for managers who have never
+SYSTEM = f"""You write the summary of a database migration check report for managers who have never
 worked on a migration. Use plain, calm, short sentences. No technical jargon (no SQL, no "rows"
 without saying "records"); say "records" for rows and "information" or "column" for columns.
 
 The migration has two parts; the report calls them Section 1 and Section 2 (never "Part"):
 - Section 1: the client's databases on the ATNM server were copied to the RDS server. This must be an
   exact copy.
-- Section 2: the copies on RDS were moved into the new system database (AlTasnimBI): tables renamed,
+- Section 2: the copies on RDS were moved into the new system database ({plain.TARGET_DB}): tables renamed,
   reshaped and linked, following the migration plan.
 
 You get a FACT SHEET. Rules:

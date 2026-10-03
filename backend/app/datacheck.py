@@ -58,6 +58,42 @@ class Skipped(Exception):
     """The mapping cannot be checked right now; the message says why."""
 
 
+# ---- empty columns: a name pair to an unused column -------------------------------------------
+
+# The last saved data check of a mapping (mapping id -> result or None). The app sets it to
+# its result store, so every check that pairs columns sees the same measured profile.
+saved_result = None
+
+
+def emptiness(result, target=None):
+    """(empty target columns, filled source columns), lower-case, from a data check result's
+    profile; (None, None) when there is none, or it was measured on another target table
+    (`target`: "schema.table")."""
+    prof = (result or {}).get("profile")
+    if not prof:
+        return None, None
+    if target and (result.get("target") or "").lower() != target.lower():
+        return None, None
+    def as_dict(cols):
+        return {c["column"].lower(): {"nulls": c["nulls"], "blanks": c.get("blanks") or 0} for c in cols or []}
+
+    return _empty_sets(as_dict(prof.get("target")), prof.get("target_rows") or 0,
+                       as_dict(prof.get("source")), prof.get("source_rows") or 0)
+
+
+def _empty_sets(tnulls, target_rows, snulls, source_rows):
+    """(target columns empty - NULL or blank - on every row, source columns with a value on
+    at least one row), from NULL profiles {lower name: {nulls, blanks}}."""
+    empty = {k for k, v in tnulls.items() if target_rows and v["nulls"] + (v.get("blanks") or 0) >= target_rows}
+    filled = {k for k, v in snulls.items() if source_rows and v["nulls"] + (v.get("blanks") or 0) < source_rows}
+    return empty, filled
+
+
+def saved_emptiness(mapping_id, target=None):
+    """emptiness() of the mapping's last saved data check."""
+    return emptiness(saved_result(mapping_id) if saved_result else None, target)
+
+
 def _q(name):
     return "[" + name.replace("]", "]]") + "]"
 
@@ -257,6 +293,44 @@ def _find_lookup(side, pair, fk):
     return {"schema": fk["referenced"]["schema"], "table": fk["referenced"]["table"],
             "column": cands[best]["name"], "type": cands[best]["type"], "key": fk["ref_column"],
             "coverage": round(hits / total, 4), "distinct_values": total, "distinct_found": hits}
+
+
+_LOOKUP_TABLES_SQL = """
+SELECT t.object_id AS oid, s.name AS sch, t.name AS tbl, c.name AS col
+FROM sys.columns c
+JOIN sys.tables t ON t.object_id = c.object_id AND t.is_ms_shipped = 0
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE c.name = ? AND t.object_id <> ?
+  AND EXISTS (SELECT 1 FROM sys.indexes i
+              JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+              WHERE i.object_id = c.object_id AND i.is_unique = 1 AND ic.column_id = c.column_id
+                AND ic.key_ordinal = 1
+                AND NOT EXISTS (SELECT 1 FROM sys.index_columns o
+                                WHERE o.object_id = i.object_id AND o.index_id = i.index_id AND o.key_ordinal > 1))
+ORDER BY s.name, t.name"""
+
+
+def _infer_lookup(side, pair, tentry):
+    """(lookup, [candidate lists]) for a recoded column that has no foreign key.
+
+    The candidates are the tables of the target database where a column of the target
+    column's own name (cluster_code, category_id) is a one-column unique key - read from the
+    catalog, nothing is named here. Each is measured like a foreign key's list
+    (_find_lookup), every one of them; one is used only when it holds every distinct source
+    value and no other list does. Otherwise no lookup, and the lists that came close are
+    returned so the finding can name them. The rows are then compared through it, all of
+    them."""
+    tables = db.query(config.TARGET_SIDE, _LOOKUP_TABLES_SQL, (pair.target["name"], tentry["object_id"]))
+    found = []
+    for t in tables:
+        f = _find_lookup(side, pair, {"referenced": {"schema": t["sch"], "table": t["tbl"]},
+                                      "referenced_object_id": t["oid"], "ref_column": t["col"]})
+        if f:
+            found.append(f)
+    good = [f for f in found if f["distinct_found"] == f["distinct_values"]]
+    if len(good) == 1:
+        return {**good[0], "inferred": True}, []
+    return None, [f"{f['schema']}.{f['table']}" for f in sorted(good or found, key=lambda f: -f["coverage"])]
 
 
 # ---- key choice ---------------------------------------------------------------------------------
@@ -667,9 +741,12 @@ def _column_verdict(c):
             elif not c["lookup"] and c["cannot_convert"] >= differing:
                 c["soft"] = "recoded"
                 c["recoded"] = True
+                opts = c.get("lookup_options") or []
+                which = (f" More than one list could hold them ({', '.join(opts)}), so none was assumed."
+                         if len(opts) > 1 else "")
                 fs.append(("review", f"{label}: recoded — {_fmt(c['cannot_convert'])} source values do not convert "
                                      f"to {c['ttype']} (e.g. {src_ex or 'text'}) and the target stores "
-                                     f"{tgt_ex or 'other values'}; confirm the rule."))
+                                     f"{tgt_ex or 'other values'}; confirm the rule.{which}"))
             elif filled >= differing:
                 c["soft"] = "filled"
                 fs.append(("review", f"{label}: the source is empty on {_fmt(filled)} rows and the target has a value "
@@ -680,8 +757,9 @@ def _column_verdict(c):
                                     f"{f'; target has e.g. {tgt_ex}' if tgt_ex else ''}.{_diff_hint(m, c)}"))
     if c["mode"] == "lookup" and not any(sev == "error" for sev, _ in fs):
         lk = c["lookup"]
+        how = " - list found by the column's name, no foreign key is declared" if lk.get("inferred") else ""
         fs.append(("info", f"{label}: verified through {lk['schema']}.{lk['table']}.{lk['column']} "
-                           f"(the id is translated back to the source text)."))
+                           f"(the id is translated back to the source text{how})."))
     if any(s == "error" for s, _ in fs):
         verdict = "problem"
     elif any(s == "review" for s, _ in fs):
@@ -709,11 +787,12 @@ class Prepared:
     """The tables of a mapping, their columns and pairs, and the SQL for both sides."""
 
 
-def prepare(m, entry_of):
+def prepare(m, entry_of, empty=None):
     """Everything a comparison of mapping `m` needs; raises Skipped when it cannot run.
 
     Shared by the data check and the values view, so both pair and convert columns the
-    same way.
+    same way. `empty`: (empty target columns, filled source columns) as emptiness() gives
+    them; by default from the mapping's last saved data check.
     """
     if m.type == "excluded":
         raise Skipped("Excluded from the migration: nothing to compare.")
@@ -742,8 +821,11 @@ def prepare(m, entry_of):
     fk_cols = set(outgoing)
     pk = next((k for k in keys["keys"] if k["kind"] == "primary"), None)
 
+    if empty is None:
+        empty = saved_emptiness(m.id, f"{tentry['schema']}.{tentry['table']}")
     rows, _ = compare.align_columns(source_cols[0], tcols, target_table=tentry["table"],
-                                    declared=m.columns, fk_columns=fk_cols)
+                                    declared=m.columns, fk_columns=fk_cols,
+                                    empty_targets=empty[0], filled_sources=empty[1])
     comparable = [r for r in rows if r["source"] and r["target"]
                   and _bt(r["source"]["type"]) not in NOCOMPARE and _bt(r["target"]["type"]) not in NOCOMPARE]
     pairs = [Pair(i, r) for i, r in enumerate(comparable)]
@@ -760,35 +842,47 @@ def prepare(m, entry_of):
 
 
 def _check(m, entry_of):
-    prep = prepare(m, entry_of)
-    srcs, sentries, tmember, tentry = prep.srcs, prep.sentries, prep.tmember, prep.tentry
-    tcols, source_cols, keys, outgoing = prep.tcols, prep.source_cols, prep.keys, prep.outgoing
-    fk_cols, pk, rows, comparable, pairs = prep.fk_cols, prep.pk, prep.rows, prep.comparable, prep.pairs
-    not_compared, side = prep.not_compared, prep.side
+    # Columns paired by their names first; the profiles below then show whether a name pair
+    # points at a column that is empty on every row.
+    prep = prepare(m, entry_of, empty=(None, None))
 
     # NULL profiles of every column, source tables summed.
-    target_rows, tnulls = _null_profile(config.TARGET_SIDE, tentry, tcols)
+    target_rows, tnulls = _null_profile(config.TARGET_SIDE, prep.tentry, prep.tcols)
     snulls, source_rows = {}, 0
-    for s, e, cols in zip(srcs, sentries, source_cols):
+    for s, e, cols in zip(prep.srcs, prep.sentries, prep.source_cols):
         n, prof = _null_profile(s.ref.side, e, cols)
         source_rows += n
         for k, v in prof.items():
             acc = snulls.setdefault(k, {"nulls": 0, "blanks": 0})
             acc["nulls"] += v["nulls"]
             acc["blanks"] += v["blanks"]
+    empty = _empty_sets(tnulls, target_rows, snulls, source_rows)
+    if any(r["source"] and r["target"] and r["match"] != "declared" and r["target"]["name"].lower() in empty[0]
+           and r["source"]["name"].lower() in empty[1] for r in prep.rows):
+        prep = prepare(m, entry_of, empty=empty)
+
+    srcs, sentries, tmember, tentry = prep.srcs, prep.sentries, prep.tmember, prep.tentry
+    tcols, source_cols, keys, outgoing = prep.tcols, prep.source_cols, prep.keys, prep.outgoing
+    fk_cols, pk, rows, comparable, pairs = prep.fk_cols, prep.pk, prep.rows, prep.comparable, prep.pairs
+    not_compared, side = prep.not_compared, prep.side
 
     # Foreign key columns whose source values do not convert: translate through the lookup.
+    # A column with no foreign key is translated through the one list of the database that
+    # has a unique column of its name and holds the source values (_infer_lookup).
     failures = _conversion_failures(side, pairs)
-    lookup_hints = {}
+    lookup_hints, lookup_options = {}, {}
     for p in pairs:
+        if _bt(p.stype) not in TEXT or not failures.get(p.i):
+            continue
         fk = outgoing.get(p.target["name"].lower())
-        if not fk or _bt(p.stype) not in TEXT or not failures.get(p.i):
-            continue
-        ref_entry = db.query(config.TARGET_SIDE, "SELECT OBJECT_ID(?) AS o",
-                             (f"{_q(fk['referenced']['schema'])}.{_q(fk['referenced']['table'])}",))[0]["o"]
-        if not ref_entry:
-            continue
-        found = _find_lookup(side, p, {**fk, "referenced_object_id": ref_entry, "ref_column": fk["ref_columns"][0]})
+        if fk:
+            ref_entry = db.query(config.TARGET_SIDE, "SELECT OBJECT_ID(?) AS o",
+                                 (f"{_q(fk['referenced']['schema'])}.{_q(fk['referenced']['table'])}",))[0]["o"]
+            if not ref_entry:
+                continue
+            found = _find_lookup(side, p, {**fk, "referenced_object_id": ref_entry, "ref_column": fk["ref_columns"][0]})
+        else:
+            found, lookup_options[p.i] = _infer_lookup(side, p, tentry)
         if found:
             p.lookup = found
             lookup_hints[p.i] = found
@@ -838,6 +932,8 @@ def _check(m, entry_of):
              **col_results.get(p.i, {})}
         if p.i in lookup_hints:
             c["lookup_hint"] = lookup_hints[p.i]
+        if lookup_options.get(p.i):
+            c["lookup_options"] = lookup_options[p.i]
         c["verdict"], fs = _column_verdict(c)
         findings += [{"severity": s, "text": t, "column": c["label"]} for s, t in fs]
         columns.append(c)
@@ -894,6 +990,11 @@ def _check(m, entry_of):
     for note in notes:
         if "renumbered" in note:
             top.append(("review", note))
+    for x in rows:
+        if x.get("released"):
+            top.append(("info", f"{x['source']['name']} was paired by name with {x['released']}, but {x['released']} is "
+                                "empty on every row while the source has values: the pair was undone, so the rename "
+                                f"check decides by the data where {x['source']['name']} went."))
     unpaired = [x["source"]["name"] for x in rows if x["source"] and not x["target"]]
     if unpaired:
         top.append(("info", f"{len(unpaired)} source column{'s' if len(unpaired) != 1 else ''} with no paired target "

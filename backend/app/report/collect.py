@@ -371,6 +371,24 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
     def fresh(res):
         return bool(res) and _fresh(res.get("checked_at"), since)
 
+    # What this run's data check measured: per-column verdicts and the empty-value profile.
+    data_col = {(c.get("source") or "").lower(): c.get("verdict") for c in data.get("columns") or []} if fresh(data) else {}
+    prof = (data.get("profile") or {}) if fresh(data) else {}
+    empty_src = {c["column"].lower() for c in prof.get("source") or []
+                 if prof.get("source_rows") and c["nulls"] + (c.get("blanks") or 0) >= prof["source_rows"]}
+    empty_tgt = {c["column"].lower() for c in prof.get("target") or []
+                 if prof.get("target_rows") and c["nulls"] + (c.get("blanks") or 0) >= prof["target_rows"]}
+    item["notes"] = []
+
+    # Source columns that feed a link the key check found by their values (Type feeds
+    # project_type_id through project.project_type): moved, and checked row by row there.
+    fed, fed_tgt = {}, set()
+    if fresh(km):
+        for lk in km.get("links") or []:
+            if lk.get("found_by") == "values" and lk.get("source") and lk.get("column"):
+                fed[lk["source"].lower()] = lk
+                fed_tgt.add(lk["column"].lower())
+
     # Renames found by the data (this run only).
     verified_src, verified_tgt = {}, set()
     if fresh(rn) and rn.get("status") == "done":
@@ -383,11 +401,15 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
                 if d["verdict"] == "verified":
                     verified_src[d["source"].lower()] = (d["target"], d.get("rows_checked"))
                     verified_tgt.add(d["target"].lower())
-                else:
+                elif d["source"].lower() not in fed:
                     issues.append(("Renamed column", plain.DECIDE,
                                    f"Possible rename {d['source']} → {d['target']}, not proven: {d.get('reason')}",
                                    f"{d['source']} → {d['target']}"))
             for n in t.get("named") or []:
+                # The rename check compares the raw values; when the data check proved the pair
+                # identical (converted, or translated through its list) there is nothing to decide.
+                if data_col.get(n["source"].lower()) == "identical":
+                    continue
                 if n.get("verdict") not in ("verified", None) and (n.get("differing") or 0) > 0:
                     issues.append(("Renamed column", plain.DECIDE,
                                    f"{n['source']} and {n['target']} are paired by name, but the data does not agree: "
@@ -399,9 +421,8 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
         out["not_checked"].append(_nc(2, item, "Renamed columns", why or "Not checked in this run.",
                                       "Generate the report again."))
 
-    # Columns, with the renames proven by the data counted as moved.
-    data_col = {(c.get("source") or "").lower(): c.get("verdict") for c in data.get("columns") or []} if fresh(data) else {}
-    dropped, retyped = [], []
+    # Columns, with the renames proven by the data and the columns feeding a link counted as moved.
+    dropped, retyped, dropped_empty, new_empty = [], [], [], []
     for comp in cmp_.get("comparisons") or []:
         tname = comp["target"].split(".", 1)[-1]
         for r in comp.get("rows") or []:
@@ -413,10 +434,25 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
             if st == "source_only" and s["name"].lower() in verified_src:
                 tgt_name, n = verified_src[s["name"].lower()]
                 label, note, t = "Renamed (proven by data)", f"identical on all {_fmt(n)} paired rows", {"name": tgt_name, "type": ""}
-            elif st == "target_only" and t["name"].lower() in verified_tgt:
+            elif st == "source_only" and s["name"].lower() in fed:
+                lk = fed[s["name"].lower()]
+                ref = f"{(lk.get('ref') or {}).get('schema')}.{(lk.get('ref') or {}).get('table')}"
+                b = lk.get("buckets") or {}
+                with_value = sum(v or 0 for v in b.values()) - (b.get("both_empty") or 0)
+                label, t = "Moved into a link", {"name": lk["column"], "type": ""}
+                note = (f"kept as the id {lk['column']} of {ref}: {_fmt(b.get('correct') or 0)} of {_fmt(with_value)} "
+                        "records with a value point at the right row")
+                item["notes"].append(f"{s['name']} → {lk['column']}: {note} (see the key links).")
+            elif st == "target_only" and (t["name"].lower() in verified_tgt or t["name"].lower() in fed_tgt):
                 continue
             elif st == "source_only" and not by_design:
-                dropped.append(s["name"])
+                if s["name"].lower() in empty_src:
+                    dropped_empty.append(s["name"])
+                else:
+                    dropped.append(s["name"] + (f" (paired by name with {r['released']}, which is empty on every row)"
+                                                if r.get("released") else ""))
+            elif st == "target_only" and t["name"].lower() in empty_tgt:
+                new_empty.append(t["name"])
             elif st == "changed" and "type" in (r.get("diffs") or []) and data_col.get(s["name"].lower()) not in (None, "identical"):
                 retyped.append(s["name"])
             out["columns"].append({"part": 2, "mapping": m.id, "table": tname, "column": s["name"] if s else "",
@@ -427,10 +463,16 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
                        f"{len(dropped)} column{'s' if len(dropped) != 1 else ''} of the source table "
                        f"{'are' if len(dropped) != 1 else 'is'} not in the target table, and no renamed column holds "
                        f"{'their' if len(dropped) != 1 else 'its'} data: {_names(dropped)}.", _names(dropped, 6)))
-    if retyped:
-        issues.append(("Column type", plain.DECIDE,
-                       f"{len(retyped)} column{'s' if len(retyped) != 1 else ''} changed format and the values "
-                       f"differ: {_names(retyped)}.", _names(retyped, 6)))
+    for name in retyped:
+        issues.append(("Column type", plain.DECIDE, f"{name}: the data type changed and the values differ.", name))
+    if dropped_empty:
+        item["notes"].append(f"{_names(dropped_empty, 8)} not moved to the target table, but "
+                             f"{'they were' if len(dropped_empty) != 1 else 'it was'} empty on every source row: "
+                             "no data is lost.")
+    if new_empty:
+        item["notes"].append(f"{len(new_empty)} target column{'s are' if len(new_empty) != 1 else ' is'} empty on every "
+                             f"row: {_names(new_empty, 8)}. Confirm the application does not read "
+                             f"{'them' if len(new_empty) != 1 else 'it'}.")
     item["columns"] = plain.DECIDE if (dropped or retyped) else (plain.BY_DESIGN if by_design else plain.CORRECT)
 
     # Values, key links and target table health: this run's results only.
@@ -523,6 +565,7 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
             item["result"] = plain.BY_DESIGN
     else:
         item["result"] = plain.worst(*parts)
+    issues = _merge_by_column(issues)
     first = next((f for k, r, f, _ in issues if r == item["result"]), None)
     item["reason"] = (first or (cmp_.get("mapping") or {}).get("note") or item.get("values_detail")
                       or ("Excluded from the migration." if m.type == "excluded" else "")
@@ -535,6 +578,58 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
     out["items"].append(item)
     for kind, result, finding, column in issues:
         out["issues"].append(_issue(2, item, kind, result, finding, column=column))
+
+
+def _column_key(column):
+    """The source column an issue is about (lower case), or None for several columns."""
+    if not column or "," in column:
+        return None
+    return column.split("→")[0].strip().lower() or None
+
+
+def _merge_by_column(issues):
+    """One issue per source column: what the checks found about the same column (a rename
+    the data does not support, a changed type, recoded or lost values) is one line, graded
+    by its worst part. A row-level line that only says the rows differ in those columns is
+    dropped when every column it names has its own line. Order is kept."""
+    groups, order = {}, []
+    for it in issues:
+        key = _column_key(it[3])
+        if key is None:
+            order.append([it])
+            continue
+        if key not in groups:
+            groups[key] = []
+            order.append(groups[key])
+        groups[key].append(it)
+    out = []
+    for group in order:
+        if len(group) == 1:
+            out.append(group[0])
+            continue
+        worst = min(group, key=lambda it: plain.ORDER[it[1]])
+        label = next((it[3] for it in group if "→" in it[3]), group[0][3])
+        prefixes = sorted({label} | {it[3] for it in group}, key=len, reverse=True)
+        parts = []
+        for _, _, finding, _ in group:
+            text = finding
+            for pfx in prefixes:
+                if text.startswith(pfx + ":"):
+                    text = text[len(pfx) + 1:].strip()
+                    break
+            if text not in parts:
+                parts.append(text)
+        out.append((worst[0], worst[1], f"{label}: " + " · ".join(parts), label))
+    own = {_column_key(it[3]) for it in out if _column_key(it[3])}
+    kept = []
+    for it in out:
+        text = it[2]
+        if not it[3] and "column" in text and "to review:" in text:
+            named = [x.strip().rstrip(".") for x in text.split("to review:", 1)[1].split(",")]
+            if named and all(_column_key(x) in own for x in named):
+                continue
+        kept.append(it)
+    return kept
 
 
 def _names(items, n=12):

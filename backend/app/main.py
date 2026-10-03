@@ -226,9 +226,13 @@ def compare_table(table: str = Query(..., description="Source table in the plan,
                 "target": name, "exists": e is not None, "locked": bool(e), "rows": [], "summary": None,
             })
             continue
+        # The same pairing as the data check: a name pair to a column its last run found
+        # empty on every row is undone (compare.align_columns).
+        empty = datacheck.saved_emptiness(m.id, f"{e['schema']}.{e['table']}")
         rows, summary = compare.align_columns(
             source_cols, target_cols, target_table=e["table"], declared=m.columns,
             fk_columns=db.fk_columns(t.ref.side, e["object_id"]),
+            empty_targets=empty[0], filled_sources=empty[1],
         )
         result["comparisons"].append({
             "target": name, "exists": True, "locked": False, "rows": rows, "summary": summary,
@@ -331,6 +335,7 @@ def foreign_key_check(
 from . import datacheck  # noqa: E402
 
 _checks = datacheck.Store(config.DATA_CHECK_FILE)
+datacheck.saved_result = _checks.get      # the measured profiles every column pairing uses
 
 
 def _run_data_check(m):
