@@ -29,6 +29,25 @@ def _fmt(n):
 
 # ---- Section 1: ATNM → RDS ------------------------------------------------------------------------
 
+# A data migration is checked on its data: these kinds are table rules or settings, not data,
+# so they are not graded or reported (the ATNM and RDS pages still show them).
+RULE_KINDS = {"Primary key", "Keys & rules", "Identity"}
+
+
+def _data_reasons(t, structure):
+    """The reasons of a Section 1 table view that are about the data: without the table rules
+    and without column differences other than the data type."""
+    cols = t.get("columns") or {}
+    soft = [c for c in cols.get("changed") or [] if c.get("severity") == "review"]
+    soft += [{"name": f"{c['source']} → {c['target']}", "notes": c["notes"][1:]}
+             for c in cols.get("renamed") or [] if c.get("severity") == "review"]
+    soft_text = None
+    if soft and not any(n.startswith("type ") for c in soft for n in c["notes"]):
+        soft_text = structure._names([f"{c['name']}: {', '.join(c['notes'])}" for c in soft], 3)
+    return [r for r in t.get("reasons") or []
+            if _kind_of_reason(r["text"]) not in RULE_KINDS and r["text"] != soft_text]
+
+
 def _kind_of_reason(text):
     t = text.lower()
     if t.startswith("not in rds") or "was not copied" in t or "neither database" in t:
@@ -129,7 +148,7 @@ def _p1_table(out, p, src_label, tgt_label, t, src_cat, tgt_cat, since, structur
     item.update(in_source=t["in_source"], in_target=t["in_target"], rows_source=rows.get("source"),
                 rows_target=rows.get("target"), columns_source=cols.get("source"), columns_target=cols.get("target"),
                 columns_missing=len(cols.get("missing") or []), columns_extra=len(cols.get("extra") or []),
-                columns_changed=len(cols.get("changed") or []), columns_renamed=len(cols.get("renamed") or []),
+                columns_changed=sum(1 for c in cols.get("changed") or [] if c.get("severity") == "problem"), columns_renamed=len(cols.get("renamed") or []),
                 live=bool(t.get("live")), checked_at=(saved or {}).get("checked_at"))
     if item["rows_source"] is not None and item["rows_target"] is not None:
         item["rows_diff"] = item["rows_target"] - item["rows_source"]
@@ -151,6 +170,16 @@ def _p1_table(out, p, src_label, tgt_label, t, src_cat, tgt_cat, since, structur
 
     # The result: the table view's own grading, with values only from this run.
     status = t["status"]
+    reasons = _data_reasons(t, structure)
+    if t["in_source"] and t["in_target"]:
+        level = ("problem" if any(r["severity"] == "problem" for r in reasons) else
+                 "review" if any(r["severity"] == "review" for r in reasons) else "ok")
+        if level != "ok":
+            status = level
+        elif (t.get("checks") or {}).get("data") == "ok":
+            status = "verified"
+        else:
+            status = "unverified"
     if status == "problem":
         item["result"] = plain.MUST_FIX
     elif status == "review":
@@ -159,7 +188,10 @@ def _p1_table(out, p, src_label, tgt_label, t, src_cat, tgt_cat, since, structur
         item["result"] = plain.CORRECT
     else:
         item["result"] = plain.NOT_CHECKED
-    item["reason"] = t.get("reason") or ""
+    first = next((r["text"] for r in reasons if r["severity"] == status), None)
+    item["reason"] = first or (t.get("reason") if t["status"] == status else "") or ""
+    if item["result"] == plain.NOT_CHECKED and not item["reason"]:
+        item["reason"] = "Values not checked in this run."
     if item["result"] == plain.CORRECT:
         item["reason"] = f"Identical: {item['values_detail']}" if item["values_detail"] else "Identical."
     if item["values"] in ("not checked", "changed since check") and t["in_source"] and t["in_target"]:
@@ -170,17 +202,12 @@ def _p1_table(out, p, src_label, tgt_label, t, src_cat, tgt_cat, since, structur
             item["reason"] = f"Values not checked in this run: {why}"
     out["items"].append(item)
 
-    for r in t.get("reasons") or []:
+    for r in reasons:
         if r["severity"] not in ("problem", "review"):
             continue
-        kind = _kind_of_reason(r["text"])
-        text, column = r["text"], _column_of(r["text"])
-        if kind in ("Keys & rules", "Primary key") and cons:
-            lost = [x for x in cons["rows"] if x.get("severity") in ("problem", "review")]
-            if lost:
-                text = f"{text.rstrip('.')}: " + "; ".join(f"{x['kind']} {x['what']}" for x in lost)
-        out["issues"].append(_issue(1, item, kind, plain.MUST_FIX if r["severity"] == "problem" else plain.DECIDE,
-                                    text, column=column))
+        out["issues"].append(_issue(1, item, _kind_of_reason(r["text"]),
+                                    plain.MUST_FIX if r["severity"] == "problem" else plain.DECIDE,
+                                    r["text"], column=_column_of(r["text"])))
     if item["live"]:
         out["issues"].append(_issue(1, item, "Live table", plain.DECIDE,
                                     "The row count kept changing while the table was checked.", column=""))
@@ -381,6 +408,8 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
             s, t, st = r.get("source"), r.get("target"), r["status"]
             label, note = {"match": "Same", "renamed": "Renamed (name rules)", "changed": "Changed",
                            "source_only": "Not migrated", "target_only": "Only in target"}[st], ", ".join(r.get("diffs") or [])
+            if st == "changed" and "type" not in (r.get("diffs") or []):
+                label = "Same"       # only a setting differs (key, can be empty, ...), not the data type
             if st == "source_only" and s["name"].lower() in verified_src:
                 tgt_name, n = verified_src[s["name"].lower()]
                 label, note, t = "Renamed (proven by data)", f"identical on all {_fmt(n)} paired rows", {"name": tgt_name, "type": ""}
@@ -432,7 +461,7 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
     if fresh(data):
         item["values_detail"] = data.get("headline") or ""
         for f in data.get("findings") or []:
-            if f["severity"] in ("error", "review"):
+            if f["severity"] in ("error", "review") and _kind_of_finding(f["text"], "Values") not in RULE_KINDS:
                 issues.append((_kind_of_finding(f["text"], "Values"),
                                plain.MUST_FIX if f["severity"] == "error" else plain.DECIDE, f["text"], f.get("column") or ""))
         for c in data.get("columns") or []:
@@ -462,10 +491,14 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
                                  **{k: b.get(k) for k in ("correct", "not_in_list", "wrong", "not_filled", "orphan")},
                                  "verdict": lk.get("verdict"), "summary": lk.get("summary") or ""})
     if fresh(q):
-        for f in q.get("findings") or []:
-            if f["severity"] in ("error", "review"):
-                issues.append((_kind_of_finding(f["text"], "Keys & rules"),
-                               plain.MUST_FIX if f["severity"] == "error" else plain.DECIDE, f["text"], ""))
+        kept = [f for f in q.get("findings") or [] if f["severity"] in ("error", "review")
+                and _kind_of_finding(f["text"], "Keys & rules") not in RULE_KINDS]
+        for f in kept:
+            issues.append((_kind_of_finding(f["text"], "Keys & rules"),
+                           plain.MUST_FIX if f["severity"] == "error" else plain.DECIDE, f["text"], ""))
+        if item["target_health"] in (plain.MUST_FIX, plain.DECIDE):
+            item["target_health"] = (plain.MUST_FIX if any(f["severity"] == "error" for f in kept) else
+                                     plain.DECIDE if kept else plain.CORRECT)
         for t in q.get("tables") or []:
             if not t.get("exists"):
                 continue

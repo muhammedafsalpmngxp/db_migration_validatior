@@ -231,6 +231,12 @@ partial report; a run cut short by a restart can be resumed. Files are kept in
 `backend/.cache/reports/<run>/` with the evidence they were built from (*Rebuild files*
 writes them again without reading a database).
 
+The report grades the **data** only: tables, record counts, column names and data types,
+renames, every value, empty values, and in Section 2 the link values, records stored twice
+and records pointing at nothing. Table rules and settings (primary/unique/foreign keys,
+defaults, check rules, identity counters, can-be-empty, collation) are not graded or listed
+in the report; the ATNM and RDS pages still show them.
+
 Both files have the same two sections: **Section 1 · ATNM → RDS** (the copy) and **Section 2 ·
 RDS → AlTasnimBI** (the move into the new system). The Word report: cover, summary, then per
 section every table (or mapping) with its result, what must be fixed and what needs a

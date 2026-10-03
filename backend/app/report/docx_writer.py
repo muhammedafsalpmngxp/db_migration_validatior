@@ -13,7 +13,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 from . import plain, settings
-from .xlsx_writer import local
+from .xlsx_writer import P1_TABLES, P2_MAPPINGS, local
 
 NAVY = RGBColor(0x1F, 0x38, 0x64)
 GREY = RGBColor(0x59, 0x59, 0x59)
@@ -261,25 +261,24 @@ def build(ev, path):
     sections = (
         (1, "part1", "Section 1 · ATNM → RDS: copy of the client's databases", "1F4E79", "part1_summary",
          "The client's databases were copied from the ATNM server to the RDS server; the copy must be exact. For every "
-         "table the migration uses, this checks that it is on both servers, its columns and their formats, its keys and "
-         "rules, the number of records, every value of every record, empty values, renamed columns and the identity "
-         "counter.",
+         "table the migration uses, this checks the data: that the table is on both servers, its column names and "
+         "data types, the number of records, every value of every record, empty values and renamed columns.",
          ["ATNM database", "RDS copy", "Tables checked"],
          [[db["source_db"], db["target_db"], db["required"]] for db in p1.get("databases") or []],
          "Result of every table", ["Database · table", "Records in ATNM", "Records in RDS", "What was found", "Result"],
          lambda i: [f"{i['source_db']} · {i['table']}", i["rows_source"], i["rows_target"], i["reason"], i["result"]],
-         "1."),
+         P1_TABLES),
         (2, "part2", f"Section 2 · RDS → {tdb}: move into the new system", "385723", "part2_summary",
          f"The copies on RDS were moved into the new system ({tdb}) as the migration plan says: tables renamed, reshaped "
          "and linked. For every mapping, this checks the number of records, how each source column maps to a target "
-         "column, every value of every record, the links to other tables, and the target table itself (primary key, records stored "
-         "twice, identity counter).",
+         "column and its data type, every value of every record, empty values, the links to other tables (do they "
+         "point at the right record), and records stored twice or pointing at nothing.",
          ["Source databases (RDS)", "Target database", "Mappings checked"], [[srcs, tdb, len(p2["items"])]],
          "Result of every mapping", ["Mapping: source table → target table", "Records expected", "Records found",
                                      "What was found", "Result"],
          lambda i: [f"{i['mapping']}\n{i['source']} → {i['target']}", i["rows_expected"], i["rows_actual"], i["reason"],
                     i["result"]],
-         "2."),
+         P2_MAPPINGS),
     )
     for part, key, title, color, summary_key, intro, db_heads, db_rows, list_title, heads, row, prefix in sections:
         items = ev[key]["items"]
@@ -304,8 +303,8 @@ def build(ev, path):
             doc.table(["Where", "Source column", "Target column", "Records compared"],
                       [[x.get("mapping") or f"{x['database']} · {x['table']}", x["source"], x["target"],
                         x.get("paired") or x.get("rows_checked")] for x in renames], [5.6, 4.0, 4.6, 2.8], size=8)
-        doc.p(f"Every detail of this section (columns, renames, keys and rules, values, records) is in the Excel file, "
-              f"on the sheets whose names start with \"{prefix}\".", 8.5, italic=True, color=GREY)
+        doc.p(f"Every detail of this section (columns, renames, empty values, records) is in the Excel file, on the "
+              f"sheet \"{prefix}\".", 8.5, italic=True, color=GREY)
         doc.page_break()
 
     # ---- not checked, sign-off, words ----

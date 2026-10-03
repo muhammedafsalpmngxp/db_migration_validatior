@@ -80,6 +80,35 @@ class Grading(unittest.TestCase):
             self.assertTrue(plain.meaning(kind) and plain.action(kind))
 
 
+class DataOnly(unittest.TestCase):
+    """The report grades the data: table rules and column settings other than the type are left out."""
+
+    def test_rules_and_settings_are_not_graded(self):
+        from app.ATNM import structure
+        from app.report import collect
+        soft_col = {"name": "Qty", "notes": ["may now be empty"], "severity": "review"}
+        soft_text = structure._names([f"{soft_col['name']}: {', '.join(soft_col['notes'])}"], 3)
+        t = {"columns": {"changed": [soft_col], "renamed": []}, "reasons": [
+            {"severity": "review", "text": "8 keys or rules not kept in RDS: 7 default values, 1 check rule"},
+            {"severity": "problem", "text": "Primary key (UId) not in RDS"},
+            {"severity": "problem", "text": "Identity counter of Id in RDS is behind (next value 5, 9 already used)"},
+            {"severity": "review", "text": soft_text},
+            {"severity": "problem", "text": "RDS has 3 fewer rows (123 in ATNM, 120 in RDS)"},
+            {"severity": "problem", "text": "1 column type changed: Qty (type int → bigint)"},
+        ]}
+        kept = [r["text"] for r in collect._data_reasons(t, structure)]
+        self.assertEqual(kept, ["RDS has 3 fewer rows (123 in ATNM, 120 in RDS)",
+                                "1 column type changed: Qty (type int → bigint)"])
+
+    def test_a_type_change_is_kept_even_among_settings(self):
+        from app.ATNM import structure
+        from app.report import collect
+        col = {"name": "Qty", "notes": ["type int → bigint", "may now be empty"], "severity": "review"}
+        text = structure._names([f"{col['name']}: {', '.join(col['notes'])}"], 3)
+        t = {"columns": {"changed": [col], "renamed": []}, "reasons": [{"severity": "review", "text": text}]}
+        self.assertEqual(len(collect._data_reasons(t, structure)), 1)
+
+
 class AiAnswerCheck(unittest.TestCase):
     FACTS = "part1: 65 required tables: 41 Correct\n- part1 | Must fix | Row count | AppMasterDB.dbo.task_daily | 320 fewer"
 
