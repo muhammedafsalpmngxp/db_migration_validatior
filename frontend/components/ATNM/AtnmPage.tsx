@@ -577,7 +577,7 @@ export function AtnmPage() {
                           )}
                           {view === "all" && t.required && (
                             <span className="shrink-0 rounded bg-accent-soft px-1.5 py-px text-[10px] font-medium text-accent"
-                              title={`Used by the migration (mapping ${t.mapping})`}>Required</span>
+                              title={t.mapping ? `Used by the migration (mapping ${t.mapping})` : "Checked as a copy only (copy_only in the migration plan)"}>Required</span>
                           )}
                         </span>
                         <span className="block truncate text-xs text-muted" title={t.reason}>{t.reason}</span>

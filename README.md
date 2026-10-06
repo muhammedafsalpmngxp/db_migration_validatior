@@ -246,6 +246,12 @@ value is the name in the list a link points to (Type next to Type_Code) is check
 as one more link; columns empty on every row are notes, not decisions; and the report shows
 one line per column.
 
+Section 1 checks every source table of the migration plan plus the plan's `copy_only` tables:
+tables that are copied ATNM → RDS but not migrated into the new system by any mapping
+(listed at the top of `backend/mappings/migration_plan.yaml`). An RDS copy whose table name
+differs from its ATNM table is paired under `atnm_names` in the same file
+(`A.dbo.Employees_V2: dbo.Employee_v2`).
+
 Both files have the same two sections: **Section 1 · ATNM → RDS** (the copy) and **Section 2 ·
 RDS → AlTasnimBI** (the move into the new system). The Word report: cover, summary, then per
 section every table (or mapping) with its result, what must be fixed and what needs a

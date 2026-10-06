@@ -22,6 +22,16 @@
 #     columns: {Description: crew_type_name, "Nationals/Expats": nationality_type}
 # Undeclared columns are paired by name: exact, case, ignoring _ and spaces, and finally
 # by the target's naming convention (Supervisor -> supervisor_id), shown as "inferred".
+#
+# copy_only lists source tables that are checked only as a copy (ATNM -> RDS, Section 1 of
+# the report) and are not migrated into the target by any mapping.
+#
+# atnm_names pairs an RDS copy with its ATNM table when the two names differ
+# (<side>.<schema>.<table> on RDS: <schema>.<table> on ATNM).
+
+copy_only: []
+
+atnm_names: {}
 
 mappings:
 
@@ -55,9 +65,9 @@ mappings:
     targets: [T.dbo.activity_taskplan_job_progress]
 
   - id: activity_task_plan_project
-    type: excluded
+    type: one_to_one
     sources: [A.dbo.ActivityTaskPlanProject]
-    note: Not used; no target table.
+    targets: [T.dbo.activity_task_plan_project]
 
   - id: company
     type: one_to_one
@@ -122,6 +132,11 @@ mappings:
     sources: [A.dbo.EmployeeType]
     targets: [T.ref.employee_type]
 
+  - id: employees_v2
+    type: one_to_one
+    sources: [A.dbo.Employee_v2]
+    targets: [T.ref.employees_v2]
+
   - id: equipment
     type: one_to_one
     sources: [A.dbo.Equipment]
@@ -146,6 +161,11 @@ mappings:
     type: one_to_one
     sources: [A.dbo.Job_Progress_PlanSnapshot]
     targets: [T.dbo.job_progress_plan_snapshot]
+
+  - id: location
+    type: one_to_one
+    sources: [A.dbo.Location]
+    targets: [T.ref.location]
 
   - id: mapping_master
     type: one_to_one

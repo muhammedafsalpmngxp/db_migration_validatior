@@ -225,6 +225,10 @@ def _catalog(ctx, p, server):
             continue
         log.add(f"{len(cat['tables'])} tables listed in {database} on {server.label} ({time.time() - started:.1f} s).",
                 database=database)
+        if server is settings.SOURCE:
+            # ATNM tables whose RDS copy has another name are filed under that name.
+            from . import required
+            cat = required.as_rds_names(cat, required.atnm_names(p))
         return cat
 
 

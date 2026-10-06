@@ -44,7 +44,9 @@ def _read_all(pairs, refresh):
     def one(item):
         p, side, server, db = item
         try:
-            return (p.id, side), catalog.read(server, db, refresh=refresh)
+            cat = catalog.read(server, db, refresh=refresh)
+            # ATNM tables whose RDS copy has another name are filed under that name.
+            return (p.id, side), required.as_rds_names(cat, required.atnm_names(p)) if side == "source" else cat
         except Exception as exc:
             return (p.id, side), {"error": _error(exc, server, db)}
 

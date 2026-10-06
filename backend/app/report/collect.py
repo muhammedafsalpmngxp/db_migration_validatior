@@ -149,6 +149,9 @@ def _fall_back_to_run_catalogs(pairs, cats, since):
             if "error" not in cats.get((p.id, side), {}):
                 continue
             kept = catalog._cache.get((server.key, db.lower()))
+            if kept and side == "source":
+                from ..ATNM import required
+                kept = required.as_rds_names(kept, required.atnm_names(p))
             if kept and kept.get("read_at", 0) >= start:
                 cats[(p.id, side)] = kept
                 replaced.setdefault(p.id, []).append((side, kept["read_at"]))
@@ -177,6 +180,9 @@ def _nc(part, item, what, why, todo):
 
 def _p1_table(out, p, src_label, tgt_label, t, src_cat, tgt_cat, since, structure, atnm_jobs):
     item = _p1_item(p, src_label, tgt_label, t, t.get("mapping"))
+    # The RDS copy's own name: another one than on ATNM when the plan pairs them (atnm_names).
+    te = tgt_cat["tables"].get(t["key"])
+    item["target_table"] = f"{te['schema']}.{te['table']}" if te else item["table"]
     saved = atnm_jobs.store.get(p.id, t["key"])
     fresh = bool(saved) and _fresh(saved.get("checked_at"), since) and saved.get("status") in ("identical", "different")
     data = t.get("data") or {}
@@ -410,6 +416,9 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
 
     # What this run's data check measured: per-column verdicts and the empty-value profile.
     data_col = {(c.get("source") or "").lower(): c.get("verdict") for c in data.get("columns") or []} if fresh(data) else {}
+    # Columns the data check translated through a lookup list: their raw values (text against
+    # an id) always differ, so a rename check on them says nothing.
+    via_lookup = {(c.get("source") or "").lower() for c in data.get("columns") or [] if c.get("mode") == "lookup"}         if fresh(data) else set()
     prof = (data.get("profile") or {}) if fresh(data) else {}
     empty_src = {c["column"].lower() for c in prof.get("source") or []
                  if prof.get("source_rows") and c["nulls"] + (c.get("blanks") or 0) >= prof["source_rows"]}
@@ -445,7 +454,7 @@ def _p2_mapping(out, m, cmp_, data, km, rn, q, live, main, since):
             for n in t.get("named") or []:
                 # The rename check compares the raw values; when the data check proved the pair
                 # identical (converted, or translated through its list) there is nothing to decide.
-                if data_col.get(n["source"].lower()) == "identical":
+                if data_col.get(n["source"].lower()) == "identical" or n["source"].lower() in via_lookup:
                     continue
                 if n.get("verdict") not in ("verified", None) and (n.get("differing") or 0) > 0:
                     issues.append(("Renamed column", plain.DECIDE,

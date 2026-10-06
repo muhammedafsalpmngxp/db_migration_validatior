@@ -66,6 +66,10 @@ class Plan:
     mappings: list
     by_source: dict = field(default_factory=dict)   # TableRef.key -> Mapping
     by_target: dict = field(default_factory=dict)   # TableRef.key -> Mapping
+    # Source tables checked only as a copy (ATNM -> RDS), not migrated by any mapping.
+    copy_only: list = field(default_factory=list)   # [TableRef]
+    # An RDS copy whose table name differs from its ATNM table: TableRef.key -> "schema.table" on ATNM.
+    atnm_names: dict = field(default_factory=dict)
 
     def for_source(self, ref):
         return self.by_source.get(ref.key)
@@ -140,4 +144,37 @@ def load(path=None):
             by_target.setdefault(m.ref.key, mapping)
         mappings.append(mapping)
 
-    return Plan(mappings, by_source, by_target)
+    copy_only, seen = [], set()
+    for text in raw.get("copy_only") or []:
+        ref = parse_ref(text)
+        where = f"copy_only {ref.ref}"
+        if ref.side not in config.SOURCE_SIDES:
+            raise PlanError(f"{where}: is not in a source database")
+        if ref.key in by_source:
+            raise PlanError(f"{where}: is already a source of {by_source[ref.key].id!r}")
+        if ref.key in seen:
+            raise PlanError(f"{where}: listed twice")
+        seen.add(ref.key)
+        copy_only.append(ref)
+
+    atnm_names, taken = {}, set()
+    raw_names = raw.get("atnm_names") or {}
+    if not isinstance(raw_names, dict):
+        raise PlanError("atnm_names must map <side>.<schema>.<table> (RDS) to <schema>.<table> (ATNM)")
+    for rds_text, atnm_text in raw_names.items():
+        ref = parse_ref(rds_text)
+        where = f"atnm_names {ref.ref}"
+        if ref.side not in config.SOURCE_SIDES:
+            raise PlanError(f"{where}: is not in a source database")
+        parts = str(atnm_text).strip().split(".")
+        if len(parts) != 2 or not all(parts):
+            raise PlanError(f"{where}: the ATNM name must be <schema>.<table>, not {atnm_text!r}")
+        if ref.key in atnm_names:
+            raise PlanError(f"{where}: listed twice")
+        atnm_key = (ref.side, str(atnm_text).strip().lower())
+        if atnm_key in taken:
+            raise PlanError(f"{where}: ATNM table {atnm_text} is already the copy of another table")
+        taken.add(atnm_key)
+        atnm_names[ref.key] = str(atnm_text).strip()
+
+    return Plan(mappings, by_source, by_target, copy_only, atnm_names)

@@ -233,7 +233,7 @@ def _main1(wb, ev):
         rows.append([
             f"{i['source_db']} · {i['table']}" if i["in_source"] is not False else f"Not in ATNM ({i['table']})",
             i["rows_source"],
-            f"{i['target_db']} · {i['table']}" if i["in_target"] is not False else "Not in RDS",
+            f"{i['target_db']} · {i.get('target_table') or i['table']}" if i["in_target"] is not False else "Not in RDS",
             i["rows_target"], i["rows_diff"], _columns_text1(i), _renamed(mine(p1["renames"]), "paired"), empty,
             i["result"], found, todo, local(i["checked_at"])])
     _sheet(wb, P1_TABLES, SECTION1, "Every required table (the tables the migration uses), copied from the ATNM server "

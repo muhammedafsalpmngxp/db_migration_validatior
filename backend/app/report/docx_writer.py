@@ -266,7 +266,9 @@ def build(ev, path):
          ["ATNM database", "RDS copy", "Tables checked"],
          [[db["source_db"], db["target_db"], db["required"]] for db in p1.get("databases") or []],
          "Result of every table", ["Database · table", "Records in ATNM", "Records in RDS", "What was found", "Result"],
-         lambda i: [f"{i['source_db']} · {i['table']}", i["rows_source"], i["rows_target"], i["reason"], i["result"]],
+         lambda i: [f"{i['source_db']} · {i['table']}" + (f" (RDS: {i['target_table']})" if i.get("target_table")
+                                                           and i["target_table"] != i["table"] else ""),
+                    i["rows_source"], i["rows_target"], i["reason"], i["result"]],
          P1_TABLES),
         (2, "part2", f"Section 2 · RDS → {tdb}: move into the new system", "385723", "part2_summary",
          f"The copies on RDS were moved into the new system ({tdb}) as the migration plan says: tables renamed, reshaped "
