@@ -4,3 +4,8 @@ pyodbc>=5.2
 python-dotenv>=1.0
 PyYAML>=6.0
 openai>=1.40
+# Report files (app/report): the Word and Excel writers
+python-docx>=1.1
+openpyxl>=3.1
+# Tests: python -m pytest tests -q
+pytest>=8.0
