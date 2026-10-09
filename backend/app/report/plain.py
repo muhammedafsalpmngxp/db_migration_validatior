@@ -31,6 +31,15 @@ OVERALL_HELP = {
 }
 
 
+# How a result is written in the Excel workbook. The evidence, the Word report and the app keep
+# the words above; only the workbook shows these.
+SHOWN = {MUST_FIX: "Need to fix"}
+
+
+def shown(word):
+    return SHOWN.get(word, word)
+
+
 def worst(*results):
     rs = [r for r in results if r and r != BY_DESIGN]
     return min(rs, key=ORDER.get) if rs else BY_DESIGN
@@ -83,6 +92,32 @@ KINDS = {
 }
 
 
+# Each kind of finding in a few words, for the sentences of the Excel Summary and Full Details.
+KIND_SHORT = {
+    "Table": "tables that were not copied",
+    "Row count": "missing or extra records",
+    "Values": "changed values",
+    "Columns": "missing columns",
+    "Column not migrated": "columns that were not moved",
+    "Extra columns": "extra columns",
+    "Column type": "changed column types",
+    "Renamed column": "renamed columns not proven by the data",
+    "Primary key": "missing primary keys",
+    "Keys & rules": "missing keys and rules",
+    "Identity": "identity counters left behind",
+    "Key links": "wrong or empty links",
+    "Duplicates": "duplicate records",
+    "Orphans": "records pointing at nothing",
+    "Empty values": "values that became empty",
+    "Live table": "tables that changed during the check",
+    "Other": "other differences",
+}
+
+
+def short(kind):
+    return KIND_SHORT.get(kind, KIND_SHORT["Other"])
+
+
 def meaning(kind):
     return KINDS.get(kind, KINDS["Other"])[0]
 
@@ -90,6 +125,39 @@ def meaning(kind):
 def action(kind):
     return KINDS.get(kind, KINDS["Other"])[1]
 
+
+# ---- the Excel Summary and Full Details sheets -----------------------------------------------------------
+
+SUMMARY_INTRO = (
+    "This report checks whether the client's data was moved completely and correctly, in two steps: first the "
+    "copy of the client's databases from the ATNM server to RDS, then the move from RDS into the new system, "
+    f"{TARGET_DB}.")
+
+STATUS_SENTENCE = {
+    "NOT READY": "The migration is not ready for go-live yet.",
+    "INCOMPLETE": "Nothing that was checked needs to be fixed, but some parts could not be checked yet.",
+    "READY": "The migration is ready: everything that was checked is correct.",
+}
+
+SUMMARY_CLOSE = "Every table, with what is wrong and what to do, is listed in the other sheets of this report."
+
+ABOUT = (
+    f"This report checks whether the client's data was moved completely and correctly into the new system "
+    f"({TARGET_DB}). The data moves in two steps, and both were checked: first the client's databases on the ATNM "
+    "server were copied to RDS (Section 1), then the RDS tables were moved into the new system, where many were "
+    "renamed and restructured (Section 2). Every number was read directly from the databases during this run; "
+    "nothing was changed in any database.")
+
+HOW_CHECKED = (
+    "Rows were matched on a key that is unique on both sides (or, without one, compared as whole-row "
+    "fingerprints), and every column was compared on every record - not a sample. Renamed columns were accepted "
+    "only when their values are identical on every record. Each code that became an id in the new system was "
+    "followed to its list to confirm it points at the right entry. All checks only read the databases.")
+
+NOTES = [
+    ("By design", "tables reshaped by business rules are not compared record by record."),
+    ("Data only", "the report grades the data; database rules such as keys and defaults are not graded."),
+]
 
 GLOSSARY = [
     ("Server", "A computer that runs the databases. ATNM is the client's server (reached over VPN); RDS is the "

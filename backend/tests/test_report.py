@@ -169,17 +169,20 @@ class SelfCheck(unittest.TestCase):
             ws = wb[xlsx_writer.P1_TABLES]
             head = [c.value for c in ws[xlsx_writer.FIRST - 1]]
             self.assertEqual(head[:5], ["Source table (ATNM)", "Row count", "Target table (RDS)", "Row count", "Difference"])
-            self.assertEqual(head[5:8], ["Columns", "Renamed columns", "Empty values (NULL)"])
-            self.assertEqual(head[8:10], ["Result", "Issues found"])
+            self.assertEqual(head[5:8], ["Columns", "Renamed columns", "Null values"])
+            self.assertEqual(head[8:10], ["Status", "Issues found"])
             self.assertNotIn("Used by mapping", head)      # the copy is table for table
             rows = {r[0]: r for r in ws.iter_rows(min_row=xlsx_writer.FIRST, values_only=True)}
             # the problem row lists its issue with the same number as the Word report; the correct one says so
             bad = rows["AppDb · dbo.t1"]
-            self.assertEqual(bad[8], "Must fix")
+            self.assertEqual(bad[8], "Need to fix")      # the workbook's word for Must fix
             self.assertIn(next(i["id"] for i in ev["issues"] if i["part"] == 1), bad[9])
             self.assertTrue(rows["AppDb · dbo.t0"][9].startswith("No issue"))
-            # only the two main sheets and the two kept ones besides the Summary
-            self.assertEqual(wb.sheetnames[3:], [xlsx_writer.NOT_IN_PLAN, xlsx_writer.WORDS])
+            # the two main sheets, the two kept ones and Full Details besides the Summary
+            self.assertEqual(wb.sheetnames[3:], [xlsx_writer.NOT_IN_PLAN, xlsx_writer.WORDS, xlsx_writer.FULL])
+            # the Summary is one paragraph; Full Details has no per-table list
+            self.assertTrue(wb["Summary"]["A5"].value.startswith(plain.SUMMARY_INTRO))
+            self.assertIn("1. About this report", [c.value for c in wb[xlsx_writer.FULL]["A"]])
             # every cell of a list has a border
             self.assertTrue(all(c.border.left.style and c.border.top.style for c in ws[xlsx_writer.FIRST]))
             ws2 = wb[xlsx_writer.P2_MAPPINGS]

@@ -1,17 +1,21 @@
 """The Excel workbook of a report, built only from its evidence.
 
-    Summary                     both sections in one page: result, counts, databases, links
+    Summary                     the whole report in one short paragraph, in plain words
     1. ATNM → RDS               one row per required table: source table and its records,
                                 target table and its records, then every issue found
     2. RDS → New System         one row per mapping: the same, with the expected records
     Tables Not In Plan          tables in the RDS databases that no mapping uses (information)
     Words Used                  what the words mean
+    Full Details                the whole report in words: about, result, table count, results
+                                by step, the findings of each section, decisions, how it was
+                                checked, notes, what the status means (no per-table list)
 
 On the two main sheets each row says what was found in plain words: one numbered line per
-issue ("1-001 Must fix: ..."), "Not checked: ..." for a part that could not be checked,
+issue ("1-001 Need to fix: ..."), "Not checked: ..." for a part that could not be checked,
 "Note: ..." for values changed on purpose, and "No issue: ..." with what was proven. Rows are
-coloured by result, problems first; every list has a header (row 3), filters, a frozen header
-and prints landscape on one page wide. The Summary counts are formulas over the main sheets.
+coloured by status, problems first; every list has a header (row 3), filters, a frozen header
+and prints landscape on one page wide. The workbook writes Must fix as "Need to fix"
+(plain.shown); the Full Details counts are formulas over the main sheets.
 """
 from datetime import datetime
 
@@ -28,12 +32,15 @@ from . import plain
 FONT = "Arial"
 THIN = Side(style="thin", color="A6A6A6")
 GRID = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-TONE = {plain.CORRECT: ("C6EFCE", "006100"), plain.MUST_FIX: ("FFC7CE", "9C0006"), plain.DECIDE: ("FFEB9C", "9C5700"),
-        plain.NOT_CHECKED: ("D9D9D9", "3F3F3F"), plain.BY_DESIGN: ("DDEBF7", "1F4E78"),
+# Colours by the word the workbook shows (plain.shown: "Need to fix" for Must fix).
+S = plain.shown
+TONE = {S(plain.CORRECT): ("C6EFCE", "006100"), S(plain.MUST_FIX): ("FFC7CE", "9C0006"),
+        S(plain.DECIDE): ("FFEB9C", "9C5700"), S(plain.NOT_CHECKED): ("D9D9D9", "3F3F3F"),
+        S(plain.BY_DESIGN): ("DDEBF7", "1F4E78"),
         "NOT READY": ("FFC7CE", "9C0006"), "INCOMPLETE": ("FFEB9C", "9C5700"), "READY": ("C6EFCE", "006100")}
 # Light colour of a whole row, by its result.
-ROW_TONE = {plain.CORRECT: "EBF7EE", plain.MUST_FIX: "FDECEE", plain.DECIDE: "FFF7DB", plain.NOT_CHECKED: "F2F2F2",
-            plain.BY_DESIGN: "EEF4FB"}
+ROW_TONE = {S(plain.CORRECT): "EBF7EE", S(plain.MUST_FIX): "FDECEE", S(plain.DECIDE): "FFF7DB",
+            S(plain.NOT_CHECKED): "F2F2F2", S(plain.BY_DESIGN): "EEF4FB"}
 NAVY = "1F3864"
 SECTION1 = {"tab": "2E75B6", "head": "1F4E79", "name": "Section 1 · ATNM → RDS"}
 SECTION2 = {"tab": "548235", "head": "385723", "name": "Section 2 · RDS → new system"}
@@ -49,7 +56,7 @@ P2_MAPPINGS = "2. RDS → New System"
 # Result and Issues found: their columns on the two main sheets
 P1_RESULT_COL, P1_ISSUES_COL = "I", 10
 P2_RESULT_COL, P2_ISSUES_COL = "J", 11
-NOT_IN_PLAN, WORDS = "Tables Not In Plan", "Words Used"
+NOT_IN_PLAN, WORDS, FULL = "Tables Not In Plan", "Words Used", "Full Details"
 
 
 def local(ts):
@@ -125,7 +132,7 @@ def _lines(item, issues, not_checked, notes, ok_text):
     found, todo = [], []
     for i in issues:
         col = f" (column: {i['column']})" if i["column"] and i["column"] not in i["finding"] else ""
-        found.append(f"{i['id']} {i['result']}: {i['finding']}{col}")
+        found.append(f"{i['id']} {S(i['result'])}: {i['finding']}{col}")
         if i["action"] not in todo:
             todo.append(i["action"])
     for n in not_checked:
@@ -235,13 +242,13 @@ def _main1(wb, ev):
             i["rows_source"],
             f"{i['target_db']} · {i.get('target_table') or i['table']}" if i["in_target"] is not False else "Not in RDS",
             i["rows_target"], i["rows_diff"], _columns_text1(i), _renamed(mine(p1["renames"]), "paired"), empty,
-            i["result"], found, todo, local(i["checked_at"])])
+            S(i["result"]), found, todo, local(i["checked_at"])])
     _sheet(wb, P1_TABLES, SECTION1, "Every required table (the tables the migration uses), copied from the ATNM server "
                                     "to RDS. The copy must be exact. Problems first; the issue numbers match the Word "
                                     "report.",
            [("Source table (ATNM)", 34), ("Row count", 11), ("Target table (RDS)", 36), ("Row count", 11),
-            ("Difference", 10), ("Columns", 26), ("Renamed columns", 28), ("Empty values (NULL)", 30),
-            ("Result", 15), ("Issues found", 70), ("What to do", 42), ("Checked at", 16)],
+            ("Difference", 10), ("Columns", 26), ("Renamed columns", 28), ("Null values", 30),
+            ("Status", 15), ("Issues found", 70), ("What to do", 42), ("Checked at", 16)],
            rows, result_cols=(9,), wrap=(1, 3, 6, 7, 8, 10, 11), number_formats={5: DIFF},
            title="Section 1 · ATNM → RDS: copy of the client's databases", row_result=9)
 
@@ -276,13 +283,13 @@ def _main2(wb, ev):
                             "source", "target")
         found, todo = _lines(i, issues, nc, notes, i.get("values_detail") or i["reason"])
         rows.append([i["mapping"], src, src_rows, tgt, tgt_rows, expected, _columns_text2(cols),
-                     _renamed(renames, "rows_checked"), empty, i["result"], found, todo, local(i["checked_at"])])
+                     _renamed(renames, "rows_checked"), empty, S(i["result"]), found, todo, local(i["checked_at"])])
     tdb = next((d["name"] for d in p2.get("databases") or [] if d["role"] == "target"), "the new system")
     _sheet(wb, P2_MAPPINGS, SECTION2, f"Every mapping of the migration plan: source table(s) on RDS → target table(s) in "
                                       f"{tdb}. Problems first; the issue numbers match the Word report.",
            [("Mapping", 24), ("Source table(s) (RDS)", 34), ("Row count", 11), (f"Target table(s) ({tdb})", 34),
             ("Row count", 11), ("Expected rows (rule)", 18), ("Columns", 28), ("Renamed columns", 28),
-            ("Empty values (NULL)", 30), ("Result", 15), ("Issues found", 70), ("What to do", 42), ("Checked at", 16)],
+            ("Null values", 30), ("Status", 15), ("Issues found", 70), ("What to do", 42), ("Checked at", 16)],
            rows, result_cols=(10,), wrap=(2, 3, 4, 5, 6, 7, 8, 9, 11, 12),
            title=f"Section 2 · RDS → {tdb}: move into the new system", row_result=10)
 
@@ -297,7 +304,7 @@ def _others(wb, ev):
                                    "Confirm none was forgotten.",
            [("Database", 24), ("Table", 44), ("Records", 14)], cov, title="Tables not in the migration plan")
     _sheet(wb, WORDS, OTHER, "What the words in this report mean.", [("Word", 28), ("Meaning", 110)],
-           [list(w) for w in plain.GLOSSARY] + [[k, v] for k, v in plain.RESULT_HELP.items()], wrap=(2,),
+           [list(w) for w in plain.GLOSSARY] + [[S(k), v] for k, v in plain.RESULT_HELP.items()], wrap=(2,),
            title="Words used")
 
 
@@ -318,125 +325,327 @@ def _link(ws, r, c, sheet, text=None):
     cell.font = Font(name=FONT, color="0563C1", underline="single")
 
 
-def _text_row(ws, r, label, text):
-    """A label and a text over columns B-G, the row as high as the text needs."""
-    _put(ws, r, 1, label, bold=True)
-    _put(ws, r, 2, text, wrap=True)
-    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=7)
-    lines = sum(max(1, -(-len(part) // 95)) for part in str(text or "").splitlines() or [""])
-    if lines > 1:
-        ws.row_dimensions[r].height = 14 * lines + 4
+def _and(words, last="and"):
+    words = [w for w in words if w]
+    return ", ".join(words[:-1]) + f" {last} " + words[-1] if len(words) > 1 else (words[0] if words else "")
+
+
+def _count(items, *results):
+    return sum(1 for i in items if i["result"] in results)
+
+
+def _name(item):
+    """A table (Section 1) or mapping (Section 2) by its short name."""
+    return item["table"].split(".")[-1] if item["part"] == 1 else item["mapping"]
+
+
+def _kinds(ev, part, result):
+    """[(kind, issues, [names])] of one section's issues with one result: the kinds that touch the most
+    tables first; the names with the biggest record difference first."""
+    items = {i["id"]: i for i in ev[f"part{part}"]["items"]}
+    groups = {}
+    for x in ev["issues"]:
+        if x["part"] == part and x["result"] == result and x["item"] in items:
+            g = groups.setdefault(x["check"], {"issues": 0, "items": {}})
+            g["issues"] += 1
+            g["items"][x["item"]] = items[x["item"]]
+    out = []
+    for kind, g in groups.items():
+        its = sorted(g["items"].values(), key=lambda i: -abs(i.get("rows_diff") or 0))
+        out.append((kind, g["issues"], [_name(i) for i in its]))
+    return sorted(out, key=lambda k: (-len(k[2]), -k[1]))
+
+
+def _target_db(ev):
+    return next((d["name"] for d in ev["part2"].get("databases") or [] if d["role"] == "target"), "the new system")
+
+
+def _checked_line(ev):
+    run = ev["run"]
+    return (f"Checked {local(run.get('started_at'))} → {local(run.get('finished_at'))}  ·  client server (ATNM) → RDS "
+            f"→ new system ({_target_db(ev)})")
+
+
+def _title(ws, ev, text):
+    """Rows 1-3: the title, the test mode line (row 2, when on) and when it was checked."""
+    run = ev["run"]
+    _put(ws, 1, 1, text, 18, True, color=NAVY)
+    if (run.get("test") or {}).get("text"):
+        _put(ws, 2, 1, run["test"]["text"], 12, True, color="9C0006")
+    _put(ws, 3, 1, _checked_line(ev), italic=True, color="595959")
+
+
+def _summary_text(ev):
+    """The whole report in one paragraph, in plain words, from the evidence."""
+    i1, i2 = ev["part1"]["items"], ev["part2"]["items"]
+    m1, d1, n1 = _count(i1, plain.MUST_FIX), _count(i1, plain.DECIDE), _count(i1, plain.NOT_CHECKED)
+    m2, d2, n2 = _count(i2, plain.MUST_FIX), _count(i2, plain.DECIDE), _count(i2, plain.NOT_CHECKED)
+    out = [plain.SUMMARY_INTRO, plain.STATUS_SENTENCE.get(ev["overall"], "")]
+
+    rest = []
+    if m1:
+        why = [f"{plain.short(k)} ({_and(names[:2])})" for k, _, names in _kinds(ev, 1, plain.MUST_FIX)[:2]]
+        rest.append(f"{m1} need to be fixed" + (f", mainly because of {_and(why)}" if why else ""))
+    if d1:
+        rest.append(f"{d1} need a decision")
+    if n1:
+        rest.append(f"{n1} could not be checked")
+    out.append(f"In the copy, we checked the {len(i1)} tables the migration uses: "
+               f"{_count(i1, plain.CORRECT, plain.BY_DESIGN)} are exact copies"
+               + (", but " + "; ".join(rest) if rest else "") + ".")
+
+    rest = [f"{m2} need to be fixed"] if m2 else []
+    if d2:
+        rest.append(f"{d2} need a decision from the client")
+    if n2:
+        rest.append(f"{n2} could not be checked")
+    out.append(f"In the move into the new system, we checked {len(i2)} mappings: "
+               f"{_count(i2, plain.CORRECT, plain.BY_DESIGN)} are correct" + (", " + _and(rest) if rest else "") + ".")
+    kinds = _kinds(ev, 2, plain.MUST_FIX)
+    if kinds:
+        kind, _, names = kinds[0]
+        line = f"The biggest problem is {plain.short(kind)}, for example in {_and(names[:3])}"
+        if len(kinds) > 1:
+            line += f"; other mappings have {_and([plain.short(k) for k, _, _ in kinds[1:4]], 'or')}"
+        out.append(line + ".")
+
+    must, decide = m1 + m2, d1 + d2
+    if must:
+        out.append(f"In total, {must} tables or mappings must be fixed"
+                   + (f" and {decide} need a decision" if decide else "") + " before go-live.")
+    elif decide:
+        out.append(f"In total, {decide} tables or mappings need a decision before go-live.")
+    if "stopped early" in (ev["run"].get("mode") or ""):
+        out.append("The run was stopped early, so this is a partial report.")
+    out.append(plain.SUMMARY_CLOSE)
+    return " ".join(x for x in out if x)
 
 
 def _summary(wb, ev):
+    """The first sheet: the whole report in one short paragraph, nothing else."""
     ws = wb[SUMMARY]
     ws.sheet_properties.tabColor = NAVY
-    run, p1, p2, ai = ev["run"], ev["part1"], ev["part2"], ev.get("summary") or {}
-    tdb = next((d["name"] for d in p2.get("databases") or [] if d["role"] == "target"), "the new system")
-    ws.column_dimensions["A"].width = 30
-    for c in "BCDEFG":
-        ws.column_dimensions[c].width = 15
-    _put(ws, 1, 1, "Database Migration Check", 18, True, color=NAVY)
-    if (run.get("test") or {}).get("text"):
-        _put(ws, 2, 1, run["test"]["text"], 12, True, color="9C0006")
-    _put(ws, 3, 1, f"ATNM → RDS → {tdb} · checked {local(run.get('started_at'))} → {local(run.get('finished_at'))}",
-         italic=True, color="595959")
+    ws.sheet_view.showGridLines = False
+    ws.column_dimensions["A"].width = 125
+    _title(ws, ev, "Database Migration Check")
+    text = _summary_text(ev)
+    _put(ws, 5, 1, text, 11, wrap=True)
+    ws.row_dimensions[5].height = 16 * max(1, -(-len(text) // 115)) + 8
+    _put(ws, 7, 1, f"Run {ev['run'].get('id')}. Read-only check: nothing was changed in any database. No passwords or "
+                   "server addresses are in this file.", 8, italic=True, color="7F7F7F")
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
 
+
+# ---- Full Details: the whole report in words (the tables and mappings are on their own sheets) -------------
+
+def _full(wb, ev):
+    ws = wb.create_sheet(FULL)
+    ws.sheet_properties.tabColor = "7030A0"
+    ws.sheet_view.showGridLines = False
+    for c, w in zip("ABCDEF", (28, 24, 18, 18, 18, 30)):
+        ws.column_dimensions[c].width = w
+    _title(ws, ev, "Full details of the report")
+    p1, p2 = ev["part1"], ev["part2"]
+    i1, i2 = p1["items"], p2["items"]
+    ai = ev.get("summary") or {}
+    tdb = _target_db(ev)
     r = 5
-    _put(ws, r, 1, "Overall result", 13, True)
-    t1, t2 = f"'{P1_TABLES}'!{P1_RESULT_COL}:{P1_RESULT_COL}", f"'{P2_MAPPINGS}'!{P2_RESULT_COL}:{P2_RESULT_COL}"
-    must, nc = plain.MUST_FIX, plain.NOT_CHECKED
-    _put(ws, r, 2, f"=IF(COUNTIF({t1},\"{must}\")+COUNTIF({t2},\"{must}\")>0,\"NOT READY\","
-                   f"IF(COUNTIF({t1},\"{nc}\")+COUNTIF({t2},\"{nc}\")>0,\"INCOMPLETE\",\"READY\"))", 13, True)
-    for word, (fill, color) in TONE.items():
-        ws.conditional_formatting.add(f"B{r}", FormulaRule(formula=[f'B{r}="{word}"'], fill=PatternFill("solid", fgColor=fill),
-                                                           font=Font(name=FONT, size=13, bold=True, color=color)))
-    _put(ws, r, 3, plain.OVERALL_HELP.get(ev["overall"], ""), italic=True, color="595959")
-    if "stopped early" in (run.get("mode") or ""):
-        r += 1
-        _put(ws, r, 1, "The run was stopped early: this is a partial report.", bold=True, color="9C0006")
-    r += 2
-    if ai:
-        _text_row(ws, r, "In short", ai.get("executive_summary", ""))
-        r += 1
-        _put(ws, r, 2, "written by AI from the facts and checked" if ai.get("source") == "ai"
-             else "plain sentences from the facts", 8, italic=True, color="7F7F7F")
-        r += 2
 
-    def section(r, sec, title, databases, sheet, col, word, part, summary, by_design):
-        _put(ws, r, 1, title, 12, True, color="FFFFFF", fill=sec["head"])
-        for c in range(2, 8):
-            ws.cell(row=r, column=c).fill = PatternFill("solid", fgColor=sec["head"])
+    def title(text):
+        nonlocal r
+        _put(ws, r, 1, text, 13, True, color=NAVY)
+        for c in range(1, 7):
+            ws.cell(row=r, column=c).border = Border(bottom=Side(style="medium", color=NAVY))
         r += 1
-        for n, line in enumerate(databases):
-            _text_row(ws, r, "Databases" if n == 0 else "", line)
-            r += 1
-        heads = [plain.CORRECT, plain.MUST_FIX, plain.DECIDE, plain.NOT_CHECKED] + ([plain.BY_DESIGN] if by_design else [])
-        _put(ws, r, 1, f"{word} checked", bold=True)
-        for c, h in enumerate(heads + ["Total"], 2):
-            cell = _put(ws, r, c, h, 9, True, color=TONE.get(h, ("", "000000"))[1], fill=TONE.get(h, ("F2F2F2",))[0])
-            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+    def text(t, bold=False):
+        nonlocal r
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
+        _put(ws, r, 1, t, bold=bold, wrap=True)
+        ws.row_dimensions[r].height = 14 * max(1, -(-len(t) // 125)) + 6
+        r += 1
+
+    def point(lead, t):
+        text(f"•  {lead}: {t}")
+
+    def header(names):
+        nonlocal r
+        for c, name in enumerate(names, 1):
+            cell = _put(ws, r, c, name, bold=True, color="FFFFFF", fill=NAVY, wrap=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             cell.border = GRID
+        ws.row_dimensions[r].height = 28
         r += 1
-        _link(ws, r, 1, sheet, f"{word} (open the sheet)")
-        for c, h in enumerate(heads, 2):
-            _put(ws, r, c, f"=COUNTIF('{sheet}'!{col}:{col},\"{h}\")", 11, True).alignment = Alignment(horizontal="center")
-        _put(ws, r, 2 + len(heads), f"=SUM(B{r}:{get_column_letter(1 + len(heads))}{r})", 11, True).alignment = \
-            Alignment(horizontal="center")
-        for c in range(2, 3 + len(heads)):
-            ws.cell(row=r, column=c).border = GRID
-        r += 1
-        _put(ws, r, 1, "Issues found", bold=True)
-        for c, h in enumerate(heads[:4], 2):
-            if h in (plain.MUST_FIX, plain.DECIDE):
-                n = sum(1 for i in ev["issues"] if i["part"] == part and i["result"] == h)
-                _put(ws, r, c, n, 11, True).alignment = Alignment(horizontal="center")
-        r += 1
-        if summary:
-            _text_row(ws, r, "Summary", summary)
-            r += 1
-        return r + 1
 
-    dbs1 = []
-    for d in p1.get("databases") or []:
-        line = f"{d['source_db']} (ATNM) → {d['target_db']} (RDS): {d['required']} tables checked"
-        if d.get("tables_source") is not None and d.get("not_required") is not None:
-            line += (f" - the ATNM database has {d['tables_source']} tables, {d['tables_source'] - d['not_required']} "
-                     f"of them used by the migration")
-        dbs1.append(line)
-    r = section(r, SECTION1, "SECTION 1 · ATNM → RDS: copy of the client's databases (must be exact)", dbs1 or ["—"],
-                P1_TABLES, P1_RESULT_COL, "Tables", 1, ai.get("part1_summary"), False)
-    srcs = ", ".join(d["name"] for d in p2.get("databases") or [] if d["role"] != "target")
-    r = section(r, SECTION2, f"SECTION 2 · RDS → {tdb}: move into the new system", [f"{srcs} (RDS) → {tdb}"],
-                P2_MAPPINGS, P2_RESULT_COL, "Mappings", 2, ai.get("part2_summary"), True)
-
-    cov = (ev.get("coverage") or {}).get("databases") or []
-    if cov:
-        _put(ws, r, 1, "Tables not in the plan", 12, True, color=NAVY)
+    def cells(values, centered=(3, 4, 5)):
+        nonlocal r
+        for c, v in enumerate(values, 1):
+            cell = _put(ws, r, c, "—" if v is None else v, wrap=True)
+            cell.border = GRID
+            if c in centered:
+                cell.alignment = Alignment(horizontal="center", vertical="top")
+            if isinstance(v, int) and not isinstance(v, bool):
+                cell.number_format = "#,##0"
         r += 1
-        for db in cov:
-            _text_row(ws, r, db["name"], f"{len(db.get('not_in_plan') or [])} of {db.get('tables', '?')} tables are not "
-                                         "used by the migration plan (listed for information).")
-            r += 1
-        _link(ws, r, 1, NOT_IN_PLAN, "See the list")
-        r += 2
 
-    _put(ws, r, 1, "What the results mean", 12, True, color=NAVY)
+    def findings(part, what):
+        """One point per kind of finding: Need to fix first, then Needs a decision."""
+        for result in (plain.MUST_FIX, plain.DECIDE):
+            for kind, n, names in _kinds(ev, part, result):
+                lead = plain.short(kind)[:1].upper() + plain.short(kind)[1:]
+                if result == plain.DECIDE:
+                    lead += " (needs a decision)"
+                point(lead, f"{n} issue{'s' if n != 1 else ''} in {len(names)} {what}{'s' if len(names) != 1 else ''}, "
+                            f"e.g. {_and(names[:4])}.")
+
+    # 1. About
+    title("1. About this report")
+    text(plain.ABOUT)
     r += 1
-    for word in plain.RESULTS:
+
+    # 2. Overall result
+    title("2. Overall result")
+    t1, t2 = f"'{P1_TABLES}'!{P1_RESULT_COL}:{P1_RESULT_COL}", f"'{P2_MAPPINGS}'!{P2_RESULT_COL}:{P2_RESULT_COL}"
+    must, nc = S(plain.MUST_FIX), S(plain.NOT_CHECKED)
+    _put(ws, r, 1, "Status", 11, True)
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=6)
+    _put(ws, r, 2, f"=IF(COUNTIF({t1},\"{must}\")+COUNTIF({t2},\"{must}\")>0,\"NOT READY\","
+                   f"IF(COUNTIF({t1},\"{nc}\")+COUNTIF({t2},\"{nc}\")>0,\"INCOMPLETE\",\"READY\"))", 12, True)
+    for word in ("NOT READY", "INCOMPLETE", "READY"):
         fill, color = TONE[word]
-        _text_row(ws, r, word, plain.RESULT_HELP[word])
-        _put(ws, r, 1, word, bold=True, color=color, fill=fill)
+        ws.conditional_formatting.add(f"B{r}", FormulaRule(formula=[f'B{r}="{word}"'], fill=PatternFill("solid", fgColor=fill),
+                                                           font=Font(name=FONT, size=12, bold=True, color=color)))
+    r += 1
+    items = i1 + i2
+    mf, dc = _count(items, plain.MUST_FIX), _count(items, plain.DECIDE)
+    text(f"{plain.STATUS_SENTENCE.get(ev['overall'], '')} {mf} tables or mappings need to be fixed and {dc} need a "
+         f"decision from the client. {_count(items, plain.CORRECT, plain.BY_DESIGN)} of the {len(items)} tables and "
+         "mappings checked are correct.")
+    r += 1
+
+    # 3. Table count
+    title("3. Table count")
+    header(["Server", "Database", "Tables", "Used by the migration", "Not used", "Role"])
+    copy_of = {}
+    for d in p1.get("databases") or []:
+        copy_of[d["target_db"]] = d["source_db"]
+        total, unused = d.get("tables_source"), d.get("not_required")
+        used = total - unused if total is not None and unused is not None else None
+        cells(["ATNM (client)", d["source_db"], total, used, unused, "client database, copy source"])
+    for d in (ev.get("coverage") or {}).get("databases") or []:
+        total, used = d.get("tables"), d.get("in_plan")
+        unused = total - used if total is not None and used is not None else None
+        role = ("could not be read in this run" if d.get("error") else "the new system" if d["role"] == "target"
+                else f"copy of {copy_of[d['name']]} on RDS" if d["name"] in copy_of else "migration source on RDS")
+        cells(["RDS", d["name"], total, used, unused, role])
+    missing = [_name(i) for i in i1 if i.get("in_target") is False]
+    missing += [t["name"] for i in i2 for t in i.get("target_tables") or [] if not t.get("exists", True)]
+    text(f"{len(missing)} tables the migration needs are missing: {_and(missing[:10])}." if missing
+         else "No table that the migration needs is missing.")
+    text(f"The tables that are not used by the migration are listed in the sheet '{NOT_IN_PLAN}' so the client can "
+         "confirm none was forgotten.")
+    r += 1
+
+    # 4. Results by step
+    title("4. Results by step")
+    words = [plain.CORRECT, plain.MUST_FIX, plain.DECIDE, plain.NOT_CHECKED, plain.BY_DESIGN]
+    header(["Step", "Checked"] + [S(w) for w in words[:4]])
+    for name, sheet, col, n in (("1. Copy (ATNM → RDS)", P1_TABLES, P1_RESULT_COL, f"{len(i1)} tables"),
+                                (f"2. Migration (RDS → {tdb})", P2_MAPPINGS, P2_RESULT_COL, f"{len(i2)} mappings")):
+        cells([name, n] + [f"=COUNTIF('{sheet}'!{col}:{col},\"{S(w)}\")" for w in words[:4]], centered=(2, 3, 4, 5, 6))
+        _link(ws, r - 1, 1, sheet, name)
+        ws.cell(row=r - 1, column=1).border = GRID
+    if _count(i2, plain.BY_DESIGN):
+        text(f"{_count(i2, plain.BY_DESIGN)} mapping(s) are different on purpose (By design) and are counted as correct "
+             "in this report.")
+    r += 1
+
+    # 5. Section 1
+    title("5. Section 1 · Copy: ATNM → RDS")
+    per_db = _and([f"{d['required']} from {d['source_db']}" for d in p1.get("databases") or []])
+    m1 = _count(i1, plain.MUST_FIX)
+    text(f"We checked the {len(i1)} tables the migration uses" + (f": {per_db}" if per_db else "") + ". For each table "
+         "we compared the columns, the number of records and every value between the client server and its copy on "
+         f"RDS. {_count(i1, plain.CORRECT, plain.BY_DESIGN)} tables are exact copies; {m1} need to be fixed "
+         f"({sum(1 for x in ev['issues'] if x['part'] == 1 and x['result'] == plain.MUST_FIX)} issues)"
+         + (f"; {_count(i1, plain.DECIDE)} need a decision" if _count(i1, plain.DECIDE) else "")
+         + (f"; {_count(i1, plain.NOT_CHECKED)} could not be checked" if _count(i1, plain.NOT_CHECKED) else "") + ".")
+    if ai.get("part1_summary"):
+        text(ai["part1_summary"])
+    findings(1, "table")
+    r += 1
+
+    # 6. Section 2
+    title(f"6. Section 2 · Migration: RDS → {tdb}")
+    text(f"We checked the {len(i2)} mappings (old table → new table) that move the RDS data into the new system. For "
+         "each we compared the columns (including renamed ones), the number of records, every value and the links "
+         f"between tables. {_count(i2, plain.CORRECT)} are correct, {_count(i2, plain.BY_DESIGN)} are different on "
+         f"purpose (by design), {_count(i2, plain.MUST_FIX)} need to be fixed "
+         f"({sum(1 for x in ev['issues'] if x['part'] == 2 and x['result'] == plain.MUST_FIX)} issues) and "
+         f"{_count(i2, plain.DECIDE)} need a decision "
+         f"({sum(1 for x in ev['issues'] if x['part'] == 2 and x['result'] == plain.DECIDE)} questions)"
+         + (f"; {_count(i2, plain.NOT_CHECKED)} could not be checked" if _count(i2, plain.NOT_CHECKED) else "") + ".")
+    if ai.get("part2_summary"):
+        text(ai["part2_summary"])
+    findings(2, "mapping")
+    r += 1
+
+    # 7. Decisions
+    title("7. Decisions needed from the client")
+    asks = [x for x in ev["issues"] if x["result"] == plain.DECIDE]
+    if asks:
+        text(f"{len({x['item'] for x in asks})} tables or mappings have columns or values that were not carried over "
+             "as they were. They may have been changed on purpose, so the client must confirm each one:")
+        by_item = {}
+        for x in asks:
+            by_item.setdefault(x["item"], x)
+        names = {i["id"]: _name(i) for i in items}
+        for item, x in by_item.items():
+            finding = x["finding"] if len(x["finding"]) <= 220 else x["finding"][:217] + "..."
+            point(names.get(item, x.get("mapping") or x["table"]), finding)
+    else:
+        text("No decision is needed from the client.")
+    r += 1
+
+    # 8. How the check was done
+    title("8. How the check was done")
+    text(plain.HOW_CHECKED)
+    r += 1
+
+    # 9. Notes and limits
+    title("9. Notes and limits")
+    live = [_name(i) for i in i1 if i.get("live")]
+    if live:
+        point("Tables in use", f"{_and(live[:5])} changed during the check, so their counts are a snapshot; a final "
+                               "check should be run at an agreed cut-off time.")
+    if ev.get("not_checked"):
+        point("Not checked", f"{len(ev['not_checked'])} parts could not be checked in this run; each is listed with "
+                             "its reason on the sheets.")
+    designed = [_name(i) for i in i2 if i["result"] == plain.BY_DESIGN]
+    if designed:
+        point("By design", f"{_and(designed[:5])}: reshaped by business rules, not compared record by record.")
+    for lead, t in plain.NOTES:
+        if lead != "By design" or not designed:
+            point(lead, t)
+    r += 1
+
+    # 10. What the status means
+    title("10. What the status means")
+    for word in plain.RESULTS:
+        fill, color = TONE[S(word)]
+        _put(ws, r, 1, S(word), bold=True, color=color, fill=fill).border = GRID
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=6)
+        _put(ws, r, 2, plain.RESULT_HELP[word], wrap=True)
         r += 1
     r += 1
-    _put(ws, r, 1, "Other sheets", 12, True, color=NAVY)
-    details = [n for n in wb.sheetnames if n not in (SUMMARY, P1_TABLES, P2_MAPPINGS)]
-    for n, name in enumerate(details):
-        _link(ws, r + 1 + n // 3, 1 + (n % 3) * 2, name)
-    r += 2 + (len(details) + 2) // 3
-    _put(ws, r, 1, f"Run {run.get('id')}{' · ' + run['mode'] if run.get('mode') else ''}. Read-only check: nothing was "
-                   "changed in any database. No passwords or server addresses are in this file.", 8, italic=True,
-         color="7F7F7F")
+    _put(ws, r, 1, f"Run {ev['run'].get('id')}{' · ' + ev['run']['mode'] if ev['run'].get('mode') else ''}. Read-only "
+                   "check: nothing was changed in any database. No passwords or server addresses are in this file.",
+         8, italic=True, color="7F7F7F")
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
 
 
 def build(ev, path):
@@ -445,6 +654,7 @@ def build(ev, path):
     _main1(wb, ev)
     _main2(wb, ev)
     _others(wb, ev)
+    _full(wb, ev)
     _summary(wb, ev)
     wb.calculation = CalcProperties(fullCalcOnLoad=True)
     wb.save(path)
