@@ -673,3 +673,9 @@ app.include_router(quality_router)
 from .report.api import router as report_router  # noqa: E402
 
 app.include_router(report_router)
+
+# ---- Direct report: client ATNM databases straight to AlTasnimBI (app/direct) ------------
+
+from .direct.api import router as direct_router  # noqa: E402
+
+app.include_router(direct_router)

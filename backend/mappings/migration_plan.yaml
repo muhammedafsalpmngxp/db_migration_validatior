@@ -132,10 +132,10 @@ mappings:
     sources: [A.dbo.EmployeeType]
     targets: [T.ref.employee_type]
 
-  - id: employees_v2
+  - id: employee_v2
     type: one_to_one
     sources: [A.dbo.Employee_v2]
-    targets: [T.ref.employees_v2]
+    targets: [T.ref.employee_v2]
 
   - id: equipment
     type: one_to_one

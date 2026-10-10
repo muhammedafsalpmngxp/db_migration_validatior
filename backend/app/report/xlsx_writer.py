@@ -11,8 +11,10 @@
                                 checked, notes, what the status means (no per-table list)
 
 On the two main sheets each row says what was found in plain words: one numbered line per
-issue ("1-001 Need to fix: ..."), "Not checked: ..." for a part that could not be checked,
-"Note: ..." for values changed on purpose, and "No issue: ..." with what was proven. Rows are
+issue ("1-001 Need to fix: <what it means>", then its details), "Not checked: ..." for a part
+that could not be checked, "Note: ..." for values changed on purpose, and "No issue: ..." with
+what was proven; next to it, Why gives the likely cause of each kind of issue (a copy, load,
+mapping or design issue - plain.CAUSES) and What to do the next steps. Rows are
 coloured by status, problems first; every list has a header (row 3), filters, a frozen header
 and prints landscape on one page wide. The workbook writes Must fix as "Need to fix"
 (plain.shown); the Full Details counts are formulas over the main sheets.
@@ -53,9 +55,11 @@ ONE_TO_ONE = "target rows = source rows"
 SUMMARY = "Summary"
 P1_TABLES = "1. ATNM → RDS"
 P2_MAPPINGS = "2. RDS → New System"
-# Result and Issues found: their columns on the two main sheets
+# Status and What we found (the issue lines): their columns on the two main sheets
 P1_RESULT_COL, P1_ISSUES_COL = "I", 10
 P2_RESULT_COL, P2_ISSUES_COL = "J", 11
+# Headers of the issue columns: what was found in plain words, then its likely cause
+FOUND, WHY = "What we found (in plain words)", "Why (likely cause)"
 NOT_IN_PLAN, WORDS, FULL = "Tables Not In Plan", "Words Used", "Full Details"
 
 
@@ -127,16 +131,27 @@ def _sheet(wb, name, section, intro, columns, rows, result_cols=(), wrap=(), num
 
 # ---- what goes in a row of the main sheets ---------------------------------------------------------------
 
-def _lines(item, issues, not_checked, notes, ok_text):
-    """(Issues found, What to do) of one table or mapping, one numbered line each."""
-    found, todo = [], []
+def _numbered(lines):
+    return "\n".join(f"{n}. {x}" for n, x in enumerate(lines, 1)) if len(lines) > 1 else (lines[0] if lines else "—")
+
+
+def _lines(item, issues, not_checked, notes, ok_text, part):
+    """(What we found, Why, What to do) of one table or mapping, in plain words. Each issue says
+    what it means, then its details; Why gives the likely cause of each kind of issue
+    (plain.cause), What to do one numbered step each."""
+    found, why, todo = [], [], []
     for i in issues:
         col = f" (column: {i['column']})" if i["column"] and i["column"] not in i["finding"] else ""
-        found.append(f"{i['id']} {S(i['result'])}: {i['finding']}{col}")
+        found.append(f"{i['id']} {S(i['result'])}: {i['meaning']}\n      Details: {i['finding']}{col}")
+        reason = plain.cause(part, i["check"])
+        if reason not in why:
+            why.append(reason)
         if i["action"] not in todo:
             todo.append(i["action"])
     for n in not_checked:
         found.append(f"Not checked: {n['what']} - {n['reason']}")
+        if plain.CAUSE_NOT_CHECKED not in why:
+            why.append(plain.CAUSE_NOT_CHECKED)
         if n["todo"] not in todo:
             todo.append(n["todo"])
     found += [f"Note: {x}" for x in notes]
@@ -144,8 +159,8 @@ def _lines(item, issues, not_checked, notes, ok_text):
         found.insert(0, f"No issue: {ok_text}" if ok_text else "No issue.")
     if item["result"] == plain.BY_DESIGN and not issues and not not_checked:
         found[0] = f"By design: {ok_text}"
-    return ("\n".join(found),
-            "\n".join(f"{n}. {x}" for n, x in enumerate(todo, 1)) if len(todo) > 1 else (todo[0] if todo else "—"))
+        why.append(plain.CAUSE_BY_DESIGN)
+    return "\n".join(found), _numbered(why), _numbered(todo)
 
 
 def _columns_text1(i):
@@ -236,20 +251,21 @@ def _main1(wb, ev):
         empty = _empty_text([(e["column"], e["null_source"], e["null_target"],
                               e["null_source"] == e["rows_source"] and e["null_target"] == e["rows_target"])
                              for e in mine(p1["empty"])], "ATNM", "RDS")
-        found, todo = _lines(i, issues, nc, notes, i.get("values_detail") or i["reason"])
+        found, why, todo = _lines(i, issues, nc, notes, i.get("values_detail") or i["reason"], 1)
         rows.append([
             f"{i['source_db']} · {i['table']}" if i["in_source"] is not False else f"Not in ATNM ({i['table']})",
             i["rows_source"],
             f"{i['target_db']} · {i.get('target_table') or i['table']}" if i["in_target"] is not False else "Not in RDS",
             i["rows_target"], i["rows_diff"], _columns_text1(i), _renamed(mine(p1["renames"]), "paired"), empty,
-            S(i["result"]), found, todo, local(i["checked_at"])])
+            S(i["result"]), found, why, todo, local(i["checked_at"])])
     _sheet(wb, P1_TABLES, SECTION1, "Every required table (the tables the migration uses), copied from the ATNM server "
-                                    "to RDS. The copy must be exact. Problems first; the issue numbers match the Word "
-                                    "report.",
+                                    "to RDS. The copy must be exact. Problems first; 'What we found' says it in plain "
+                                    "words, 'Why' gives the likely cause, 'What to do' the next step. The issue numbers "
+                                    "match the Word report.",
            [("Source table (ATNM)", 34), ("Row count", 11), ("Target table (RDS)", 36), ("Row count", 11),
             ("Difference", 10), ("Columns", 26), ("Renamed columns", 28), ("Null values", 30),
-            ("Status", 15), ("Issues found", 70), ("What to do", 42), ("Checked at", 16)],
-           rows, result_cols=(9,), wrap=(1, 3, 6, 7, 8, 10, 11), number_formats={5: DIFF},
+            ("Status", 15), (FOUND, 70), (WHY, 45), ("What to do", 42), ("Checked at", 16)],
+           rows, result_cols=(9,), wrap=(1, 3, 6, 7, 8, 10, 11, 12), number_formats={5: DIFF},
            title="Section 1 · ATNM → RDS: copy of the client's databases", row_result=9)
 
 
@@ -281,16 +297,18 @@ def _main2(wb, ev):
             expected = i["rule"]
         empty = _empty_text([(v["column"], v.get("null_source"), v.get("null_target"), False) for v in values],
                             "source", "target")
-        found, todo = _lines(i, issues, nc, notes, i.get("values_detail") or i["reason"])
+        found, why, todo = _lines(i, issues, nc, notes, i.get("values_detail") or i["reason"], 2)
         rows.append([i["mapping"], src, src_rows, tgt, tgt_rows, expected, _columns_text2(cols),
-                     _renamed(renames, "rows_checked"), empty, S(i["result"]), found, todo, local(i["checked_at"])])
+                     _renamed(renames, "rows_checked"), empty, S(i["result"]), found, why, todo, local(i["checked_at"])])
     tdb = next((d["name"] for d in p2.get("databases") or [] if d["role"] == "target"), "the new system")
     _sheet(wb, P2_MAPPINGS, SECTION2, f"Every mapping of the migration plan: source table(s) on RDS → target table(s) in "
-                                      f"{tdb}. Problems first; the issue numbers match the Word report.",
+                                      f"{tdb}. Problems first; 'What we found' says it in plain words, 'Why' gives the "
+                                      "likely cause (for example a mapping issue), 'What to do' the next step. The issue "
+                                      "numbers match the Word report.",
            [("Mapping", 24), ("Source table(s) (RDS)", 34), ("Row count", 11), (f"Target table(s) ({tdb})", 34),
             ("Row count", 11), ("Expected rows (rule)", 18), ("Columns", 28), ("Renamed columns", 28),
-            ("Null values", 30), ("Status", 15), ("Issues found", 70), ("What to do", 42), ("Checked at", 16)],
-           rows, result_cols=(10,), wrap=(2, 3, 4, 5, 6, 7, 8, 9, 11, 12),
+            ("Null values", 30), ("Status", 15), (FOUND, 70), (WHY, 45), ("What to do", 42), ("Checked at", 16)],
+           rows, result_cols=(10,), wrap=(2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13),
            title=f"Section 2 · RDS → {tdb}: move into the new system", row_result=10)
 
 

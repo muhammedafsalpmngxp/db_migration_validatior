@@ -170,7 +170,7 @@ class SelfCheck(unittest.TestCase):
             head = [c.value for c in ws[xlsx_writer.FIRST - 1]]
             self.assertEqual(head[:5], ["Source table (ATNM)", "Row count", "Target table (RDS)", "Row count", "Difference"])
             self.assertEqual(head[5:8], ["Columns", "Renamed columns", "Null values"])
-            self.assertEqual(head[8:10], ["Status", "Issues found"])
+            self.assertEqual(head[8:11], ["Status", xlsx_writer.FOUND, xlsx_writer.WHY])
             self.assertNotIn("Used by mapping", head)      # the copy is table for table
             rows = {r[0]: r for r in ws.iter_rows(min_row=xlsx_writer.FIRST, values_only=True)}
             # the problem row lists its issue with the same number as the Word report; the correct one says so

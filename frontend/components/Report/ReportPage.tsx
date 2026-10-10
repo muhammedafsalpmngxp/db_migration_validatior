@@ -6,6 +6,7 @@ import { SectionTabs } from "../ATNM/SectionTabs";
 import { duration } from "../ATNM/RunLog";
 import { Badge, Card, Dot, ErrorBox, Spinner, type Tone } from "../ui";
 import { reportApi, type Preflight, type ReportLogEntry, type ReportMeta, type ReportStatus, type Stage } from "./api";
+import { DirectReportSection } from "../DirectReport/DirectReportSection";
 
 const OVERALL_TONE: Record<string, Tone> = { "NOT READY": "bad", INCOMPLETE: "warn", READY: "ok" };
 const STAGE_TONE: Record<Stage["status"], Tone> = {
@@ -312,6 +313,8 @@ export function ReportPage() {
             </div>
           )}
         </Card>
+
+        <DirectReportSection />
       </main>
     </div>
   );

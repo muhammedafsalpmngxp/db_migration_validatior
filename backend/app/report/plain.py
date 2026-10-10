@@ -92,6 +92,58 @@ KINDS = {
 }
 
 
+# The likely cause of each kind of finding, by section (1: the copy ATNM → RDS, 2: the move into the
+# new system), for the "Why (likely cause)" column of the workbook. A likely cause, not a proven one.
+CAUSES = {
+    1: {
+        "Table": "Copy issue - the table was not copied to RDS.",
+        "Row count": "Copy issue - records were not copied, or extra ones were added; often the client added or "
+                     "deleted records after the copy was made.",
+        "Values": "Copy issue - records were changed on the client server after the copy, or a value was converted "
+                  "during the copy (for example a date or a text).",
+        "Columns": "Copy issue - the RDS table was created without these columns (an older table design).",
+        "Extra columns": "Copy issue - the RDS table has columns the client's table does not have.",
+        "Column type": "Copy issue - the column was created with another type on RDS, so values may be cut or "
+                       "converted.",
+        "Renamed column": "Copy issue - the column has another name on RDS.",
+        "Empty values": "Copy issue - values were not copied into this column, so it is empty on RDS.",
+        "Primary key": "Copy issue - the table's key was not copied.",
+        "Keys & rules": "Copy issue - the table's keys or rules were not copied.",
+        "Identity": "Copy issue - the identity counter was not set after the copy.",
+        "Live table": "Timing - the client is still writing to this table, so it changed during the check.",
+    },
+    2: {
+        "Table": "Load issue - the new table does not exist or was not loaded.",
+        "Row count": "Load issue - records were not loaded into the new table (the load stopped early or filtered "
+                     "them out), or some were loaded twice.",
+        "Values": "Conversion issue - values changed when they were moved into the new table (another type, "
+                  "format or lookup list).",
+        "Columns": "Mapping issue - the new table has no column for this information.",
+        "Column not migrated": "Mapping issue - the column was renamed or dropped in the new design, and the "
+                               "mapping file does not say which.",
+        "Extra columns": "Design change - the new table has columns of its own.",
+        "Column type": "Design change - the new table stores the value with another type, so values may be cut, "
+                       "rounded or converted.",
+        "Renamed column": "Mapping issue - the column seems renamed, but the data does not prove it.",
+        "Key links": "Mapping issue - the old code was not translated to the right id of the new list.",
+        "Duplicates": "Load issue - the same records were loaded more than once.",
+        "Orphans": "Load or mapping issue - records point to entries that were not loaded.",
+        "Empty values": "Load or mapping issue - the value was not carried over, so it is empty now.",
+        "Primary key": "Design issue - the new table has no primary key.",
+        "Keys & rules": "Design issue - the new table is missing a key or rule.",
+        "Identity": "Load issue - the identity counter was not reset after the load.",
+        "Live table": "Timing - the source changed during the check.",
+    },
+}
+CAUSE_OTHER = "See What we found."
+CAUSE_NOT_CHECKED = "Not checked - the check could not run (the reason is in What we found)."
+CAUSE_BY_DESIGN = "By design - changed on purpose by the migration's business rules."
+
+
+def cause(part, kind):
+    return CAUSES.get(part, {}).get(kind, CAUSE_OTHER)
+
+
 # Each kind of finding in a few words, for the sentences of the Excel Summary and Full Details.
 KIND_SHORT = {
     "Table": "tables that were not copied",
